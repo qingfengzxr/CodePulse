@@ -108,13 +108,13 @@ export function ModuleTrendChart({ analysisId, seriesByMetric }: ModuleTrendChar
           selected: Object.fromEntries(
             modules.map((module) => [module.name, selection[module.key] !== false]),
           ),
-          pageIconColor: "#fde68a",
+          pageIconColor: tokens.pageIconActive,
           pageIconInactiveColor: tokens.pageIconInactive,
           pageTextStyle: {
             color: tokens.axisLabel,
           },
           textStyle: {
-            color: tokens.tooltipText,
+            color: tokens.emphasisText,
             width: compact ? 120 : 160,
             overflow: "truncate",
           },
@@ -154,7 +154,7 @@ export function ModuleTrendChart({ analysisId, seriesByMetric }: ModuleTrendChar
               color: tokens.zoomText,
             },
             handleStyle: {
-              color: "#fde68a",
+              color: tokens.zoomHandle,
               borderColor: "transparent",
             },
           },

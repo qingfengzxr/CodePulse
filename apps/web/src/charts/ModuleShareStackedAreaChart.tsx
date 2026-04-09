@@ -110,7 +110,7 @@ export function ModuleShareStackedAreaChart({ series }: ModuleShareStackedAreaCh
               color: tokens.zoomText,
             },
             handleStyle: {
-              color: "#fde68a",
+              color: tokens.zoomHandle,
               borderColor: "transparent",
             },
           },

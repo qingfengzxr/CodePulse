@@ -160,7 +160,7 @@ export function ModuleCandlestickChart({ candles }: ModuleCandlestickChartProps)
               color: tokens.zoomText,
             },
             handleStyle: {
-              color: "#fde68a",
+              color: tokens.zoomHandle,
               borderColor: "transparent",
             },
           },

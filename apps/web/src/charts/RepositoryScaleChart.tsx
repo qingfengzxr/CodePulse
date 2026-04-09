@@ -90,7 +90,7 @@ export function RepositoryScaleChart({ series }: RepositoryScaleChartProps) {
               color: tokens.zoomText,
             },
             handleStyle: {
-              color: "#fde68a",
+              color: tokens.zoomHandle,
               borderColor: "transparent",
             },
           },

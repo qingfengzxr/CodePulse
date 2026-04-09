@@ -135,7 +135,7 @@ export function ModuleBumpChart({ seriesByMetric }: ModuleBumpChartProps) {
               color: tokens.zoomText,
             },
             handleStyle: {
-              color: "#fde68a",
+              color: tokens.zoomHandle,
               borderColor: "transparent",
             },
           },
