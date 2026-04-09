@@ -1,157 +1,169 @@
-# Code Dance
+# CodeDance
 
-`code-dance` 是一个用于分析其他 Git 代码仓库历史演化的工具。本仓库本身不是被分析对象，而是分析器、查询服务和展示层的实现仓库。
+Analyze how a Git repository evolves over time.
 
-当前目标是围绕“模块代码量如何随时间变化”构建一套可扩展的分析系统，重点支持：
+> Joke of the day: which module just hit limit-down? Check the module candlestick chart.
 
-- 按模块统计历史 `LOC`
-- 统计新增、删除、`churn`
-- 通过 Web 页面展示折线图、柱状图等视图
-- 后续复用同一套数据层与服务层支持 TUI
+CodeDance is a local-first repository history analysis toolkit. It scans Git history, detects modules, computes time-series metrics such as LOC, added, deleted, and churn, persists the results, and exposes them through a local API and web UI.
 
-## 目录导航
+Languages: **English** | [简体中文](./README.zh-CN.md)
+
+## What CodeDance Does
+
+CodeDance is built to answer questions like:
+
+- How does each module grow or shrink over time?
+- Which modules accumulate the most churn?
+- When did a module split, disappear, or get reorganized?
+- How does repository scale change across weeks, days, or commits?
+
+Current focus:
+
+- Analyze Git repository history from a local path
+- Detect modules for Rust and Node/Web repositories
+- Compute module-level `loc`, `added`, `deleted`, and `churn`
+- Support `weekly`, `daily`, and `per-commit` sampling
+- Persist analysis results into local SQLite
+- Explore results in a React-based web UI
+
+## Architecture
+
+The repository is organized as a pnpm monorepo:
 
 ```text
-code-dance/
-  README.md
-  docs/
-    design/
-    roadmap/
-    discuss/
-  vibe/
+apps/
+  api/          Local HTTP API for analysis jobs and query endpoints
+  web/          Web UI for repository registration, analysis, and charts
+
+packages/
+  analyzer/     History analyzers, module detection, sampling logic
+  git/          Git access primitives and repository inspection
+  storage/      SQLite persistence and query layer
+  domain/       Core domain models
+  contracts/    Shared API DTOs and schemas
+  config/       Analysis configuration helpers
 ```
 
-各目录职责如下：
+Dependency direction:
 
-- `README.md`
-  - 全局导航
-  - 说明项目目标
-  - 说明目录规则
-  - 记录快速启动方式
-- `docs/design/`
-  - 存放设计文档
-  - 顶层文件用于总体设计或跨模块设计
-  - 子目录用于按主题拆分设计文档，例如 `visual/`、`storage/`
-  - 各主题目录内使用简单序号命名，例如 `01-views.md`、`01-sqlite-schema.md`
-  - 重要总设计文档建议在文档头部维护版本号、更新时间和变更摘要
-- `docs/roadmap/`
-  - 存放实现路径、阶段计划、开发推进文档
-  - 使用序号编排编号
-  - 推荐命名格式：`1.xxx-plan.md`、`2.xxx-plan.md`
-  - 开发进度统一使用 Markdown checkbox 表示：`- [ ]`、`- [x]`
-- `docs/discuss/`
-  - 存放重要讨论的沉淀文档
-  - 使用序号编排编号
-  - 适合记录方案取舍、设计争议、阶段性结论
-- `vibe/`
-  - 存放 vibe-coding 相关规范、协作约定、工作流规则
+```text
+web -> api -> analyzer -> git
+          -> storage
+contracts <-> api/web
+domain    <-> analyzer/storage
+```
 
-## 文档管理规则
+## Current Capabilities
 
-### 设计文档
+- Register a local Git repository from the web UI
+- Detect repository kind and modules
+- Run asynchronous history analysis jobs with progress reporting
+- Store analysis snapshots and module metrics in SQLite
+- Query summaries, modules, series, distributions, and rankings
+- Render trend, ranking, stacked area, and candlestick-style charts
 
-- 总体设计优先放在 `docs/design/` 顶层，例如 `0.architecture.md`
-- 专题设计按主题拆到 `docs/design/<topic>/`，例如 `docs/design/storage/`、`docs/design/visual/`
-- 主题目录内优先使用简单文件名规则，例如 `01-views.md`、`02-query-api.md`
-- 设计文档应尽量描述目标、边界、结构、数据模型、接口与风险
+Module detection currently supports:
 
-### 路线图文档
+- Rust workspace / crate structure
+- Node workspace / package structure
+- Node/Web fallback heuristics for repositories without workspace config
 
-- 路线图与计划统一放在 `docs/roadmap/`
-- 每份计划文档都应可跟踪进度
-- 任务状态统一使用：
-  - `- [ ]` 未完成
-  - `- [x]` 已完成
+## Quick Start
 
-### 讨论文档
+Requirements:
 
-- 重要讨论不要散落在聊天记录中
-- 形成结论后应沉淀到 `docs/discuss/`
-- 讨论文档应重点记录背景、分歧点、结论与后续动作
+- Node.js
+- pnpm
+- Git available in PATH
 
-## 当前已整理文档
+Install dependencies:
 
-- [总体架构设计](/home/zxr/work/github/code-dance/docs/design/0.architecture.md)
-- [可视化视图设计](/home/zxr/work/github/code-dance/docs/design/visual/01-views.md)
-- [SQLite 存储结构设计](/home/zxr/work/github/code-dance/docs/design/storage/01-sqlite-schema.md)
-- [初始实现路线图](/home/zxr/work/github/code-dance/docs/roadmap/1.initial-plan.md)
-- [详细实现规划](/home/zxr/work/github/code-dance/docs/roadmap/2.implementation-plan.md)
+```bash
+pnpm install
+```
 
-## 快速启动
+Start the API:
 
-当前仓库已经有第一轮工程骨架，可以启动最小 API 与 Web 开发环境。
+```bash
+pnpm dev:api
+```
 
-1. 阅读 [总体架构设计](/home/zxr/work/github/code-dance/docs/design/0.architecture.md)
-2. 阅读 [初始实现路线图](/home/zxr/work/github/code-dance/docs/roadmap/1.initial-plan.md)
-3. 阅读 [详细实现规划](/home/zxr/work/github/code-dance/docs/roadmap/2.implementation-plan.md)
-4. 安装依赖：`pnpm install`
-5. 启动 API：`pnpm dev:api`
-6. 启动 Web：`pnpm dev:web`
+Start the web app:
 
-默认端口：
+```bash
+pnpm dev:web
+```
+
+Default endpoints:
 
 - API: `http://127.0.0.1:3001`
 - Web: `http://127.0.0.1:5173`
 
-如需修改 API 端口，可在启动时覆盖：
+Override the API port if needed:
 
-- `PORT=3100 pnpm dev:api`
+```bash
+PORT=3100 pnpm dev:api
+```
 
-当前最小可用能力：
+## Typical Workflow
 
-- Web 页面可输入本地 Git 仓库绝对路径
-- API 会校验目录是否存在、是否为 Git 仓库
-- API 会返回仓库名、默认分支以及基础语言探测结果
-- 当前已接通仓库注册与仓库列表查询
-- 对 Rust 仓库可探测 workspace / crate 模块
-- 可对 Rust 仓库按周采样并生成 crate LOC 时间序列
-- 分析结果会持久化到本地 SQLite：`.code-dance/code-dance.sqlite`
-- API 已提供 `analysis-summaries`、`modules`、`series`、`distribution`、`ranking` 等查询接口
-- Web 页面可展示总量趋势、堆叠面积图、模块排行、模块趋势图和 crate/LOC K 线图
-- 分析任务采用异步执行，前端可显示基于采样点和文件处理进度的真实进度条
+1. Open the web app.
+2. Register a local Git repository by absolute path.
+3. Choose a sampling mode such as `weekly`, `daily`, or `per-commit`.
+4. Start an analysis job.
+5. Inspect module trends, rankings, distribution, and candlestick views.
 
-当前前端技术约定：
+Results are stored locally in:
 
-- 页面框架使用 React + Vite
-- 图表统一使用 ECharts
+```text
+.code-dance/code-dance.sqlite
+```
 
-## 当前阶段重点
+## Development
 
-当前优先级是：
+Useful commands:
 
-- 建立 monorepo 基础结构
-- 先实现 Rust 仓库的模块识别
-- 打通分析层、存储层和 Web 展示链路
+```bash
+pnpm install
+pnpm build
+pnpm typecheck
+pnpm test
+pnpm dev:api
+pnpm dev:web
+```
 
-## 当前实现状态
+This project analyzes other repositories. The CodeDance repository itself is the implementation of the analyzer, storage, API, and UI layers.
 
-已完成：
+## Documentation
 
-- monorepo 工作区骨架
-- `apps/api` 最小 Fastify 服务
-- `apps/web` React + Vite 页面
-- `packages/domain`、`packages/contracts`、`packages/config`
-- `packages/git` 中本地 Git 仓库校验、采样与历史读取
-- `packages/analyzer` 中 Rust workspace / crate 模块探测与历史分析
-- SQLite 持久化与 DAO 层
-- 本地路径注册仓库接口
-- 仓库模块探测接口
-- 查询型 API：`analysis-summaries`、`modules`、`series`、`distribution`、`ranking`
-- 基于 ECharts 的 crate LOC 折线图
-- 基于 ECharts 的模块堆叠面积图、排行图
-- 基于 ECharts 的 crate/LOC K 线图
-- 异步分析任务与进度轮询
+Core docs:
 
-待完成：
+- [Architecture](./docs/design/0.architecture.md)
+- [Visualization Views](./docs/design/visual/01-views.md)
+- [SQLite Schema](./docs/design/storage/01-sqlite-schema.md)
+- [Analyzer Implementation](./packages/analyzer/docs/implementation.md)
+- [Analyzer Performance and Concurrency](./packages/analyzer/docs/performance-and-concurrency.md)
+- [Initial Roadmap](./docs/roadmap/1.initial-plan.md)
+- [Implementation Plan](./docs/roadmap/2.implementation-plan.md)
 
-- 默认 `first-parent` 主线采样
-- 手工模块配置与 fallback provider
-- 结果缓存 / 重复执行检测
-- 独立的 `added / deleted` 柱状图与事件流接口
-- TUI 首版能力
+## Roadmap
 
-## 约定
+Completed:
 
-- 设计、路线图、讨论文档默认使用中文
-- 目录规则以本文件为准
-- 后续如新增顶层目录，应先在本文件补充说明
+- Monorepo workspace
+- Local API and web UI
+- SQLite persistence
+- Rust and Node/Web module detection
+- History analysis with sampling-aware result storage
+- Progress reporting for asynchronous analysis jobs
+
+Planned:
+
+- Configurable manual module rules and fallback providers
+- Better duplicate-run detection and caching
+- More event-oriented history views
+- TUI support built on top of the same data interfaces
+
+## License
+
+Apache License 2.0. See [LICENSE](./LICENSE).
