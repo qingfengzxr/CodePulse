@@ -5,6 +5,8 @@ import { realpath } from "node:fs/promises";
 import {
   analysisSummarySchema,
   analysisResultSchema,
+  candlesQuerySchema,
+  candlesResponseSchema,
   createAnalysisRequestSchema,
   createLocalRepositoryRequestSchema,
   distributionQuerySchema,
@@ -237,6 +239,33 @@ export function createServer(deps: CreateServerDeps = {}) {
     }
   });
 
+  app.get("/api/candles", async (request, reply) => {
+    try {
+      const raw = request.query as {
+        analysisId?: string;
+        moduleKeys?: string;
+      };
+      const parsed = candlesQuerySchema.parse({
+        analysisId: raw.analysisId,
+        moduleKeys: raw.moduleKeys
+          ? raw.moduleKeys
+              .split(",")
+              .map((moduleKey) => moduleKey.trim())
+              .filter(Boolean)
+          : [],
+      });
+
+      const result = await storage.query.queryCandles(parsed);
+      if (!result) {
+        return sendApiError(reply, 404, "analysis_not_found", "analysis was not found");
+      }
+
+      return candlesResponseSchema.parse(result);
+    } catch (error) {
+      return sendApiError(reply, 400, "invalid_candles_query", error);
+    }
+  });
+
   app.get("/api/distribution", async (request, reply) => {
     try {
       const parsed = distributionQuerySchema.parse(request.query);
@@ -333,6 +362,7 @@ export function createServer(deps: CreateServerDeps = {}) {
       },
       snapshots: [],
       points: [],
+      candles: [],
     });
 
     await storage.analysisJobs.create(initialRecord.job);
@@ -414,6 +444,7 @@ async function runAnalysisTask(input: {
       analysisId: input.analysisId,
       snapshots: result.snapshots,
       points: result.points,
+      candles: result.candles,
     });
 
     const finishedAt = new Date().toISOString();

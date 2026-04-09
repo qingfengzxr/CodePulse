@@ -138,23 +138,27 @@ export async function listCommits(localPath: string, branch: string): Promise<Gi
 }
 
 export function sampleCommits(commits: GitCommit[], sampling: AnalysisSampling): GitCommit[] {
+  return bucketCommits(commits, sampling).map((bucket) => bucket[bucket.length - 1]!);
+}
+
+export function bucketCommits(commits: GitCommit[], sampling: AnalysisSampling): GitCommit[][] {
   if (sampling === "per-commit") {
-    return commits;
+    return commits.map((commit) => [commit]);
   }
 
   if (sampling === "tag-based") {
-    return commits.length > 0 ? [commits[commits.length - 1]] : [];
+    return commits.length > 0 ? [[commits[commits.length - 1]!]] : [];
   }
 
   if (sampling === "daily") {
-    return sampleCommitsByBucket(commits, (commit) => commit.committedAt.slice(0, 10));
+    return bucketCommitsByBucket(commits, (commit) => commit.committedAt.slice(0, 10));
   }
 
   if (sampling === "monthly") {
-    return sampleCommitsByBucket(commits, (commit) => commit.committedAt.slice(0, 7));
+    return bucketCommitsByBucket(commits, (commit) => commit.committedAt.slice(0, 7));
   }
 
-  return sampleCommitsByBucket(commits, (commit) => {
+  return bucketCommitsByBucket(commits, (commit) => {
     const date = new Date(commit.committedAt);
     const weekDate = new Date(
       Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
@@ -167,29 +171,30 @@ export function sampleCommits(commits: GitCommit[], sampling: AnalysisSampling):
   });
 }
 
-function sampleCommitsByBucket(
+function bucketCommitsByBucket(
   commits: GitCommit[],
   getBucket: (commit: GitCommit) => string,
-): GitCommit[] {
-  const sampled: GitCommit[] = [];
+): GitCommit[][] {
+  const buckets: GitCommit[][] = [];
   let previousBucket: string | null = null;
-  let previousCommit: GitCommit | null = null;
+  let currentBucketCommits: GitCommit[] = [];
 
   for (const commit of commits) {
     const currentBucket = getBucket(commit);
-    if (previousBucket !== null && currentBucket !== previousBucket && previousCommit) {
-      sampled.push(previousCommit);
+    if (previousBucket !== null && currentBucket !== previousBucket && currentBucketCommits.length) {
+      buckets.push(currentBucketCommits);
+      currentBucketCommits = [];
     }
 
     previousBucket = currentBucket;
-    previousCommit = commit;
+    currentBucketCommits.push(commit);
   }
 
-  if (previousCommit) {
-    sampled.push(previousCommit);
+  if (currentBucketCommits.length > 0) {
+    buckets.push(currentBucketCommits);
   }
 
-  return sampled;
+  return buckets;
 }
 
 export async function readTextFileAtRevision(

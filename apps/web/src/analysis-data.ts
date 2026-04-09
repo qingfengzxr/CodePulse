@@ -1,5 +1,6 @@
 import type {
   AnalysisResultDto,
+  CandlesResponseDto,
   DistributionResponseDto,
   MetricPointDto,
   RankingResponseDto,
@@ -365,62 +366,44 @@ export function getTotalDistributionValue(distribution: DistributionResponseDto)
   return distribution.items.reduce((sum, item) => sum + item.value, 0);
 }
 
-export function buildCandlestickSeriesFromQueries(input: {
-  loc: SeriesResponseDto;
-  added?: SeriesResponseDto;
-  deleted?: SeriesResponseDto;
-}): {
+export function buildCandlestickSeriesFromQuery(candles: CandlesResponseDto): {
   xAxis: string[];
   modules: Array<{
     key: string;
     name: string;
     kind: string;
-    candles: Array<[number, number, number, number]>;
-    closes: number[];
+    candles: Array<{
+      open: number;
+      high: number;
+      low: number;
+      close: number;
+    }>;
+    latestClose: number;
+    peakHigh: number;
   }>;
 } {
-  const locSeries = buildMetricSeriesFromQuery(input.loc);
-  const addedByModule = input.added
-    ? new Map(
-        buildMetricSeriesFromQuery(input.added).modules.map((module) => [
-          module.key,
-          module.values,
-        ]),
-      )
-    : new Map<string, number[]>();
-  const deletedByModule = input.deleted
-    ? new Map(
-        buildMetricSeriesFromQuery(input.deleted).modules.map((module) => [
-          module.key,
-          module.values,
-        ]),
-      )
-    : new Map<string, number[]>();
-
   return {
-    xAxis: locSeries.xAxis,
-    modules: locSeries.modules.map((module) => {
-      const addedValues = addedByModule.get(module.key) ?? [];
-      const deletedValues = deletedByModule.get(module.key) ?? [];
-      const candles = module.values.map((close, index) => {
-        const previousClose = index === 0 ? 0 : (module.values[index - 1] ?? 0);
-        const added = addedValues[index] ?? (index === 0 ? close : 0);
-        const deleted = deletedValues[index] ?? 0;
-        const open = previousClose;
-        const high = Math.max(open, close, open + added);
-        const low = Math.max(0, Math.min(open, close, open - deleted));
+    xAxis: candles.timeline.map((snapshot) => snapshot.ts),
+    modules: [...candles.series]
+      .map((module) => ({
+        key: module.moduleKey,
+        name: module.moduleName,
+        kind: module.moduleKind,
+        candles: module.values,
+        latestClose: module.values.at(-1)?.close ?? 0,
+        peakHigh: module.values.reduce((peak, candle) => Math.max(peak, candle.high), 0),
+      }))
+      .sort((left, right) => {
+        if (right.latestClose !== left.latestClose) {
+          return right.latestClose - left.latestClose;
+        }
 
-        return [open, close, low, high] as [number, number, number, number];
-      });
+        if (right.peakHigh !== left.peakHigh) {
+          return right.peakHigh - left.peakHigh;
+        }
 
-      return {
-        key: module.key,
-        name: module.name,
-        kind: module.kind,
-        candles,
-        closes: module.values,
-      };
-    }),
+        return left.name.localeCompare(right.name);
+      }),
   };
 }
 

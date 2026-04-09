@@ -2,39 +2,30 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import * as echarts from "echarts";
 
-import type { SeriesResponseDto } from "@code-dance/contracts";
-import { buildCandlestickSeriesFromQueries, formatMetricValue } from "../analysis-data";
+import type { CandlesResponseDto } from "@code-dance/contracts";
+import { buildCandlestickSeriesFromQuery, formatMetricValue } from "../analysis-data";
 import { axisStyle, baseGrid, createBaseChart, escapeHtml } from "./chart-helpers";
 
 type ModuleCandlestickChartProps = {
-  seriesByMetric: {
-    loc: SeriesResponseDto;
-    added?: SeriesResponseDto;
-    deleted?: SeriesResponseDto;
-  };
+  candles: CandlesResponseDto;
 };
 
 type FocusMode = 8 | 16 | "all";
 
-export function ModuleCandlestickChart({ seriesByMetric }: ModuleCandlestickChartProps) {
+export function ModuleCandlestickChart({ candles }: ModuleCandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.EChartsType | null>(null);
   const [focusMode, setFocusMode] = useState<FocusMode>(8);
   const [selectedModuleKey, setSelectedModuleKey] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const data = useMemo(
-    () =>
-      buildCandlestickSeriesFromQueries({
-        loc: seriesByMetric.loc,
-        added: seriesByMetric.added,
-        deleted: seriesByMetric.deleted,
-      }),
-    [seriesByMetric],
+    () => buildCandlestickSeriesFromQuery(candles),
+    [candles],
   );
 
   const rankedModules = [...data.modules].sort((left, right) => {
-    const leftClose = left.closes.at(-1) ?? 0;
-    const rightClose = right.closes.at(-1) ?? 0;
+    const leftClose = left.latestClose;
+    const rightClose = right.latestClose;
     if (rightClose !== leftClose) {
       return rightClose - leftClose;
     }
@@ -50,7 +41,7 @@ export function ModuleCandlestickChart({ seriesByMetric }: ModuleCandlestickChar
 
   useEffect(() => {
     setSelectedModuleKey(visibleModules[0]?.key ?? null);
-  }, [focusMode, seriesByMetric.loc.analysisId, visibleModules[0]?.key]);
+  }, [candles.analysisId, focusMode, visibleModules[0]?.key]);
 
   useEffect(() => {
     if (!containerRef.current) {
@@ -72,13 +63,19 @@ export function ModuleCandlestickChart({ seriesByMetric }: ModuleCandlestickChar
   useEffect(() => {
     const chart = chartRef.current;
     const container = containerRef.current;
-    const currentModuleLabel = selectedModule ? `${selectedModule.name} / LOC` : "crate / LOC";
+    const currentModuleLabel = selectedModule ? `${selectedModule.name} / LOC` : "module / LOC";
 
     if (!chart || !container || !selectedModule) {
       return;
     }
 
     const compact = container.clientWidth < 720;
+    const candleData = selectedModule.candles.map((candle) => [
+      candle.open,
+      candle.close,
+      candle.low,
+      candle.high,
+    ] as const);
     chart.setOption(
       {
         backgroundColor: "transparent",
@@ -97,10 +94,10 @@ export function ModuleCandlestickChart({ seriesByMetric }: ModuleCandlestickChar
 
             return [
               `<strong>${escapeHtml(String(params?.axisValueLabel ?? "").slice(0, 10))}</strong>`,
-              `Open: ${formatMetricValue(candle[0] ?? 0)}`,
-              `Close: ${formatMetricValue(candle[1] ?? 0)}`,
-              `Low: ${formatMetricValue(candle[2] ?? 0)}`,
-              `High: ${formatMetricValue(candle[3] ?? 0)}`,
+              `开盘 LOC: ${formatMetricValue(candle[0] ?? 0)}`,
+              `收盘 LOC: ${formatMetricValue(candle[1] ?? 0)}`,
+              `最低 LOC: ${formatMetricValue(candle[2] ?? 0)}`,
+              `最高 LOC: ${formatMetricValue(candle[3] ?? 0)}`,
             ].join("<br/>");
           },
         },
@@ -147,7 +144,7 @@ export function ModuleCandlestickChart({ seriesByMetric }: ModuleCandlestickChar
         series: [
           {
             type: "candlestick",
-            data: selectedModule.candles,
+            data: candleData,
             itemStyle: {
               color: "#22c55e",
               color0: "#f43f5e",
@@ -172,10 +169,9 @@ export function ModuleCandlestickChart({ seriesByMetric }: ModuleCandlestickChar
     <div className="chart-panel">
       <div className="chart-toolbar chart-toolbar-stacked">
         <div>
-          <h3>{selectedModule ? `${selectedModule.name} / LOC K 线图` : "crate / LOC K 线图"}</h3>
+          <h3>{selectedModule ? `${selectedModule.name} / LOC K 线图` : "模块 / LOC K 线图"}</h3>
           <p className="chart-subtitle">
-            把模块当成交易对来玩。Open 是上一个采样点 LOC，Close 是当前 LOC，High / Low 用 added /
-            deleted 推导区间。
+            每根 K 线都基于采样桶内真实观测到的 commit 级模块 LOC 路径计算，表达开盘、收盘、最高和最低。
           </p>
         </div>
         <div className="chart-toolbar-inline">
@@ -184,7 +180,7 @@ export function ModuleCandlestickChart({ seriesByMetric }: ModuleCandlestickChar
               当前交易对 {selectedModule ? selectedModule.name : "-"}
             </span>
             <span className="chart-chip">
-              收盘 {formatMetricValue(selectedModule?.closes.at(-1) ?? 0)}
+              收盘 {formatMetricValue(selectedModule?.latestClose ?? 0)}
             </span>
           </div>
           <div className="chart-focus-switch">
@@ -205,14 +201,14 @@ export function ModuleCandlestickChart({ seriesByMetric }: ModuleCandlestickChar
 
       <div className="chart-filter-bar">
         <div className="chart-summary">
-          <span className="chart-chip">{visibleModules.length} 个候选 crate</span>
-          <span className="chart-chip chart-chip-muted">只是好玩，但看起来还真像那么回事</span>
+          <span className="chart-chip">{visibleModules.length} 个候选模块</span>
+          <span className="chart-chip chart-chip-muted">OHLC 来自 bucket 内真实 commit 观测</span>
         </div>
         <label className="chart-search">
           <span>搜索模块</span>
           <input
             onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="按模块名过滤交易对"
+            placeholder="按模块名过滤"
             type="search"
             value={searchQuery}
           />
@@ -230,10 +226,10 @@ export function ModuleCandlestickChart({ seriesByMetric }: ModuleCandlestickChar
           >
             <strong>{module.name}</strong>
             <span>{module.kind}</span>
-            <span>Close {formatMetricValue(module.closes.at(-1) ?? 0)}</span>
+            <span>收盘 {formatMetricValue(module.latestClose)}</span>
           </button>
         ))}
-        {filteredModules.length === 0 ? <p className="feedback">当前搜索没有命中交易对。</p> : null}
+        {filteredModules.length === 0 ? <p className="feedback">当前搜索没有命中模块。</p> : null}
       </div>
 
       <div className="chart-surface" ref={containerRef} />

@@ -4,7 +4,7 @@ import type {
   AnalyzeRepositoryHistoryInput,
   AnalyzeRepositoryHistoryOutput,
 } from "./languages/shared/types.js";
-import type { MetricPoint, Snapshot } from "@code-dance/domain";
+import type { MetricPoint, ModuleCandlePoint, Snapshot } from "@code-dance/domain";
 
 export type {
   AnalyzeRepositoryHistoryInput,
@@ -59,6 +59,7 @@ function mergeAnalyzerResults(
     return {
       snapshots: [],
       points: [],
+      candles: [],
     };
   }
 
@@ -76,6 +77,7 @@ function mergeAnalyzerResults(
   return {
     snapshots: baselineSnapshots,
     points: results.flatMap((result) => result.output.points).sort(compareMetricPoints),
+    candles: results.flatMap((result) => result.output.candles).sort(compareCandlePoints),
   };
 }
 
@@ -109,6 +111,15 @@ function assertMatchingSnapshots(
 }
 
 function compareMetricPoints(left: MetricPoint, right: MetricPoint) {
+  const tsOrder = left.ts.localeCompare(right.ts);
+  if (tsOrder !== 0) {
+    return tsOrder;
+  }
+
+  return left.moduleKey.localeCompare(right.moduleKey);
+}
+
+function compareCandlePoints(left: ModuleCandlePoint, right: ModuleCandlePoint) {
   const tsOrder = left.ts.localeCompare(right.ts);
   if (tsOrder !== 0) {
     return tsOrder;

@@ -8,6 +8,7 @@ import type {
   AnalysisProgress,
   AnalysisResult,
   MetricPoint,
+  ModuleCandlePoint,
   RepositoryTarget,
   Snapshot,
 } from "@code-dance/domain";
@@ -47,6 +48,22 @@ export type DistributionResult = {
     moduleName: string;
     moduleKind: string;
     value: number;
+  }>;
+};
+
+export type CandlesResult = {
+  analysisId: string;
+  timeline: SnapshotSummary[];
+  series: Array<{
+    moduleKey: string;
+    moduleName: string;
+    moduleKind: string;
+    values: Array<{
+      open: number;
+      high: number;
+      low: number;
+      close: number;
+    }>;
   }>;
 };
 
@@ -95,7 +112,12 @@ export interface AnalysisResultQueryStore {
   getAnalysisResult(id: string): Promise<AnalysisResult | null>;
   listSnapshots(analysisId: string): Promise<SnapshotSummary[]>;
   listMetricPoints(analysisId: string): Promise<MetricPoint[]>;
+  listModuleCandles(analysisId: string): Promise<ModuleCandlePoint[]>;
   listModulesByAnalysis(analysisId: string): Promise<AnalysisModuleSummary[]>;
+  queryCandles(input: {
+    analysisId: string;
+    moduleKeys?: string[];
+  }): Promise<CandlesResult | null>;
   querySeries(input: {
     analysisId: string;
     metric: AnalysisMetric;
@@ -119,6 +141,7 @@ export interface AnalysisPersistenceStore {
     analysisId: string;
     snapshots: Snapshot[];
     points: MetricPoint[];
+    candles: ModuleCandlePoint[];
   }): Promise<void>;
 }
 
@@ -199,6 +222,7 @@ export function createSqliteStorage(options?: { dbPath?: string }): SqliteStorag
           db.prepare(`delete from analysis_progress where analysis_id = ?`).run(analysis.id);
           db.prepare(`delete from snapshots where analysis_id = ?`).run(analysis.id);
           db.prepare(`delete from module_metrics where analysis_id = ?`).run(analysis.id);
+          db.prepare(`delete from module_candles where analysis_id = ?`).run(analysis.id);
           db.prepare(`delete from analysis_modules where analysis_id = ?`).run(analysis.id);
         }
 
@@ -387,6 +411,7 @@ export function createSqliteStorage(options?: { dbPath?: string }): SqliteStorag
       const progress = getAnalysisProgress(db, id) ?? createFallbackProgress(job);
       const snapshots = await this.listSnapshots(id);
       const points = await this.listMetricPoints(id);
+      const candles = await this.listModuleCandles(id);
 
       return {
         job,
@@ -397,6 +422,7 @@ export function createSqliteStorage(options?: { dbPath?: string }): SqliteStorag
           ts: snapshot.ts,
         })),
         points,
+        candles,
       };
     },
     async listSnapshots(analysisId) {
@@ -422,6 +448,18 @@ export function createSqliteStorage(options?: { dbPath?: string }): SqliteStorag
         .all(analysisId) as MetricPointRow[];
 
       return rows.map(mapMetricPointRow);
+    },
+    async listModuleCandles(analysisId) {
+      const rows = db
+        .prepare(
+          `select analysis_id, ts, commit_hash, module_key, module_name, module_kind, open, high, low, close
+           from module_candles
+           where analysis_id = ?
+           order by ts asc, module_key asc`,
+        )
+        .all(analysisId) as ModuleCandleRow[];
+
+      return rows.map(mapModuleCandleRow);
     },
     async listModulesByAnalysis(analysisId) {
       const rows = db
@@ -467,6 +505,58 @@ export function createSqliteStorage(options?: { dbPath?: string }): SqliteStorag
       return {
         analysisId: input.analysisId,
         metric: input.metric,
+        timeline,
+        series: Array.from(grouped.values()).sort((left, right) =>
+          left.moduleKey.localeCompare(right.moduleKey),
+        ),
+      };
+    },
+    async queryCandles(input) {
+      const timeline = await this.listSnapshots(input.analysisId);
+      const analysis = await analysisJobs.getById(input.analysisId);
+      if (!analysis) {
+        return null;
+      }
+
+      const moduleKeys = input.moduleKeys && input.moduleKeys.length > 0 ? input.moduleKeys : null;
+      const rows = readCandleRows(db, input.analysisId, moduleKeys);
+      const seqToIndex = new Map(timeline.map((snapshot, index) => [snapshot.seq, index]));
+      const grouped = new Map<
+        string,
+        {
+          moduleKey: string;
+          moduleName: string;
+          moduleKind: string;
+          values: Array<{ open: number; high: number; low: number; close: number }>;
+        }
+      >();
+
+      for (const row of rows) {
+        const item = grouped.get(row.module_key) ?? {
+          moduleKey: row.module_key,
+          moduleName: row.module_name,
+          moduleKind: row.module_kind,
+          values: Array.from({ length: timeline.length }, () => ({
+            open: 0,
+            high: 0,
+            low: 0,
+            close: 0,
+          })),
+        };
+        const index = seqToIndex.get(row.snapshot_seq);
+        if (index !== undefined) {
+          item.values[index] = {
+            open: row.open,
+            high: row.high,
+            low: row.low,
+            close: row.close,
+          };
+        }
+        grouped.set(row.module_key, item);
+      }
+
+      return {
+        analysisId: input.analysisId,
         timeline,
         series: Array.from(grouped.values()).sort((left, right) =>
           left.moduleKey.localeCompare(right.moduleKey),
@@ -531,6 +621,11 @@ export function createSqliteStorage(options?: { dbPath?: string }): SqliteStorag
           analysis_id, snapshot_seq, ts, commit_hash, module_key, module_name, module_kind, loc, added, deleted, churn
         ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
+      const candleInsert = db.prepare(
+        `insert into module_candles (
+          analysis_id, snapshot_seq, ts, commit_hash, module_key, module_name, module_kind, open, high, low, close
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
       const moduleInsert = db.prepare(
         `insert into analysis_modules (analysis_id, module_key, module_name, module_kind)
          values (?, ?, ?, ?)`,
@@ -539,6 +634,7 @@ export function createSqliteStorage(options?: { dbPath?: string }): SqliteStorag
       const transaction = db.transaction(() => {
         db.prepare(`delete from snapshots where analysis_id = ?`).run(input.analysisId);
         db.prepare(`delete from module_metrics where analysis_id = ?`).run(input.analysisId);
+        db.prepare(`delete from module_candles where analysis_id = ?`).run(input.analysisId);
         db.prepare(`delete from analysis_modules where analysis_id = ?`).run(input.analysisId);
 
         const snapshotSeqByKey = new Map<string, number>();
@@ -576,6 +672,39 @@ export function createSqliteStorage(options?: { dbPath?: string }): SqliteStorag
           if (!seenModuleKeys.has(point.moduleKey)) {
             moduleInsert.run(input.analysisId, point.moduleKey, point.moduleName, point.moduleKind);
             seenModuleKeys.add(point.moduleKey);
+          }
+        }
+
+        for (const candle of input.candles) {
+          const snapshotSeq = snapshotSeqByKey.get(toSnapshotKey(candle.ts, candle.commit));
+          if (!snapshotSeq) {
+            throw new Error(
+              `module candle does not match a known snapshot: ${candle.ts} ${candle.commit}`,
+            );
+          }
+
+          candleInsert.run(
+            input.analysisId,
+            snapshotSeq,
+            candle.ts,
+            candle.commit,
+            candle.moduleKey,
+            candle.moduleName,
+            candle.moduleKind,
+            candle.open,
+            candle.high,
+            candle.low,
+            candle.close,
+          );
+
+          if (!seenModuleKeys.has(candle.moduleKey)) {
+            moduleInsert.run(
+              input.analysisId,
+              candle.moduleKey,
+              candle.moduleName,
+              candle.moduleKind,
+            );
+            seenModuleKeys.add(candle.moduleKey);
           }
         }
       });
@@ -668,6 +797,21 @@ function initializeSchema(db: Database.Database) {
       primary key (analysis_id, snapshot_seq, module_key)
     );
 
+    create table if not exists module_candles (
+      analysis_id text not null,
+      snapshot_seq integer not null,
+      ts text not null,
+      commit_hash text not null,
+      module_key text not null,
+      module_name text not null,
+      module_kind text not null,
+      open integer not null,
+      high integer not null,
+      low integer not null,
+      close integer not null,
+      primary key (analysis_id, snapshot_seq, module_key)
+    );
+
     create index if not exists idx_analysis_jobs_created_at
       on analysis_jobs (created_at desc);
 
@@ -676,6 +820,9 @@ function initializeSchema(db: Database.Database) {
 
     create index if not exists idx_module_metrics_analysis_ts
       on module_metrics (analysis_id, ts, module_key);
+
+    create index if not exists idx_module_candles_analysis_ts
+      on module_candles (analysis_id, ts, module_key);
   `);
 }
 
@@ -700,6 +847,29 @@ function readSeriesRows(db: Database.Database, analysisId: string, moduleKeys: s
        order by module_key asc, snapshot_seq asc`,
     )
     .all(analysisId, ...moduleKeys) as SeriesRow[];
+}
+
+function readCandleRows(db: Database.Database, analysisId: string, moduleKeys: string[] | null) {
+  if (!moduleKeys || moduleKeys.length === 0) {
+    return db
+      .prepare(
+        `select snapshot_seq, module_key, module_name, module_kind, open, high, low, close
+         from module_candles
+         where analysis_id = ?
+         order by module_key asc, snapshot_seq asc`,
+      )
+      .all(analysisId) as CandleSeriesRow[];
+  }
+
+  const placeholders = moduleKeys.map(() => "?").join(", ");
+  return db
+    .prepare(
+      `select snapshot_seq, module_key, module_name, module_kind, open, high, low, close
+       from module_candles
+       where analysis_id = ? and module_key in (${placeholders})
+       order by module_key asc, snapshot_seq asc`,
+    )
+    .all(analysisId, ...moduleKeys) as CandleSeriesRow[];
 }
 
 function resolveSnapshot(
@@ -874,6 +1044,21 @@ function mapMetricPointRow(row: MetricPointRow): MetricPoint {
   };
 }
 
+function mapModuleCandleRow(row: ModuleCandleRow): ModuleCandlePoint {
+  return {
+    analysisId: row.analysis_id,
+    ts: row.ts,
+    commit: row.commit_hash,
+    moduleKey: row.module_key,
+    moduleName: row.module_name,
+    moduleKind: row.module_kind,
+    open: row.open,
+    high: row.high,
+    low: row.low,
+    close: row.close,
+  };
+}
+
 function mapAnalysisModuleRow(row: AnalysisModuleRow): AnalysisModuleSummary {
   return {
     key: row.module_key,
@@ -959,6 +1144,19 @@ type MetricPointRow = {
   churn: number;
 };
 
+type ModuleCandleRow = {
+  analysis_id: string;
+  ts: string;
+  commit_hash: string;
+  module_key: string;
+  module_name: string;
+  module_kind: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+};
+
 type AnalysisModuleRow = {
   module_key: string;
   module_name: string;
@@ -974,6 +1172,17 @@ type SeriesRow = {
   added: number;
   deleted: number;
   churn: number;
+};
+
+type CandleSeriesRow = {
+  snapshot_seq: number;
+  module_key: string;
+  module_name: string;
+  module_kind: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
 };
 
 type MetricValueRow = {

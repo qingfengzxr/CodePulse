@@ -1,5 +1,6 @@
 import type {
   AnalysisProgress,
+  ModuleCandlePoint,
   AnalysisSampling,
   MetricPoint,
   RepositoryKind,
@@ -27,4 +28,5 @@ export type AnalyzeRepositoryHistoryInput = {
 export type AnalyzeRepositoryHistoryOutput = {
   snapshots: Snapshot[];
   points: MetricPoint[];
+  candles: ModuleCandlePoint[];
 };

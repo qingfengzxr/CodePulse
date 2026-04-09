@@ -16,6 +16,44 @@ function createAnalysisOutput(analysisId: string): AnalyzeRepositoryHistoryOutpu
       { analysisId, commit: "aaa111", ts: "2026-04-01T00:00:00.000Z" },
       { analysisId, commit: "bbb222", ts: "2026-04-08T00:00:00.000Z" },
     ],
+    candles: [
+      {
+        analysisId,
+        ts: "2026-04-01T00:00:00.000Z",
+        commit: "aaa111",
+        moduleKey: "rust:crate:core",
+        moduleName: "core",
+        moduleKind: "rust-crate",
+        open: 8,
+        high: 10,
+        low: 8,
+        close: 10,
+      },
+      {
+        analysisId,
+        ts: "2026-04-08T00:00:00.000Z",
+        commit: "bbb222",
+        moduleKey: "rust:crate:core",
+        moduleName: "core",
+        moduleKind: "rust-crate",
+        open: 10,
+        high: 14,
+        low: 9,
+        close: 14,
+      },
+      {
+        analysisId,
+        ts: "2026-04-08T00:00:00.000Z",
+        commit: "bbb222",
+        moduleKey: "rust:crate:web",
+        moduleName: "web",
+        moduleKind: "rust-crate",
+        open: 0,
+        high: 6,
+        low: 0,
+        close: 6,
+      },
+    ],
     points: [
       {
         analysisId,
@@ -62,6 +100,56 @@ function createMixedAnalysisOutput(analysisId: string): AnalyzeRepositoryHistory
     snapshots: [
       { analysisId, commit: "aaa111", ts: "2026-04-01T00:00:00.000Z" },
       { analysisId, commit: "bbb222", ts: "2026-04-08T00:00:00.000Z" },
+    ],
+    candles: [
+      {
+        analysisId,
+        ts: "2026-04-01T00:00:00.000Z",
+        commit: "aaa111",
+        moduleKey: "rust:crate:core",
+        moduleName: "core",
+        moduleKind: "rust-crate",
+        open: 10,
+        high: 10,
+        low: 10,
+        close: 10,
+      },
+      {
+        analysisId,
+        ts: "2026-04-08T00:00:00.000Z",
+        commit: "bbb222",
+        moduleKey: "rust:crate:core",
+        moduleName: "core",
+        moduleKind: "rust-crate",
+        open: 10,
+        high: 15,
+        low: 10,
+        close: 15,
+      },
+      {
+        analysisId,
+        ts: "2026-04-01T00:00:00.000Z",
+        commit: "aaa111",
+        moduleKey: "node:package:web",
+        moduleName: "web",
+        moduleKind: "node-package",
+        open: 3,
+        high: 3,
+        low: 3,
+        close: 3,
+      },
+      {
+        analysisId,
+        ts: "2026-04-08T00:00:00.000Z",
+        commit: "bbb222",
+        moduleKey: "node:package:web",
+        moduleName: "web",
+        moduleKind: "node-package",
+        open: 3,
+        high: 6,
+        low: 3,
+        close: 6,
+      },
     ],
     points: [
       {
@@ -204,6 +292,7 @@ test("api persists analyses and serves query endpoints from sqlite", async () =>
     );
     assert.equal(finalAnalysis.statusCode, 200);
     assert.equal(finalAnalysis.json().points.length, 3);
+    assert.equal(finalAnalysis.json().candles.length, 3);
 
     const modulesResponse = await app.inject({
       method: "GET",
@@ -233,6 +322,13 @@ test("api persists analyses and serves query endpoints from sqlite", async () =>
     });
     assert.equal(distributionResponse.statusCode, 200);
     assert.equal(distributionResponse.json().snapshot.seq, 2);
+
+    const candlesResponse = await app.inject({
+      method: "GET",
+      url: `/api/candles?analysisId=${initial.job.id}&moduleKeys=rust:crate:core`,
+    });
+    assert.equal(candlesResponse.statusCode, 200);
+    assert.equal(candlesResponse.json().series[0].values[1].high, 14);
 
     const rankingResponse = await app.inject({
       method: "GET",

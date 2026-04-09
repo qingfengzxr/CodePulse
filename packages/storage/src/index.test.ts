@@ -8,6 +8,7 @@ import type {
   AnalysisJob,
   AnalysisProgress,
   MetricPoint,
+  ModuleCandlePoint,
   RepositoryTarget,
   Snapshot,
 } from "@code-dance/domain";
@@ -133,6 +134,59 @@ function createPoints(analysisId = "analysis-1"): MetricPoint[] {
   ];
 }
 
+function createCandles(analysisId = "analysis-1"): ModuleCandlePoint[] {
+  return [
+    {
+      analysisId,
+      ts: "2026-04-01T00:00:00.000Z",
+      commit: "aaa111",
+      moduleKey: "rust:crate:core",
+      moduleName: "core",
+      moduleKind: "rust-crate",
+      open: 8,
+      high: 10,
+      low: 8,
+      close: 10,
+    },
+    {
+      analysisId,
+      ts: "2026-04-01T00:00:00.000Z",
+      commit: "aaa111",
+      moduleKey: "rust:crate:web",
+      moduleName: "web",
+      moduleKind: "rust-crate",
+      open: 0,
+      high: 4,
+      low: 0,
+      close: 4,
+    },
+    {
+      analysisId,
+      ts: "2026-04-08T00:00:00.000Z",
+      commit: "bbb222",
+      moduleKey: "rust:crate:core",
+      moduleName: "core",
+      moduleKind: "rust-crate",
+      open: 10,
+      high: 14,
+      low: 9,
+      close: 14,
+    },
+    {
+      analysisId,
+      ts: "2026-04-08T00:00:00.000Z",
+      commit: "bbb222",
+      moduleKey: "rust:crate:web",
+      moduleName: "web",
+      moduleKind: "rust-crate",
+      open: 4,
+      high: 7,
+      low: 4,
+      close: 6,
+    },
+  ];
+}
+
 test("sqlite storage initializes schema and supports writes plus queries", async () => {
   await withStorage(async (storage) => {
     await storage.repositories.create(createRepository());
@@ -145,6 +199,7 @@ test("sqlite storage initializes schema and supports writes plus queries", async
       analysisId: "analysis-1",
       snapshots: createSnapshots(),
       points: createPoints(),
+      candles: createCandles(),
     });
 
     const repositories = await storage.repositories.list();
@@ -154,6 +209,7 @@ test("sqlite storage initializes schema and supports writes plus queries", async
     assert.ok(result);
     assert.equal(result.snapshots.length, 2);
     assert.equal(result.points.length, 4);
+    assert.equal(result.candles.length, 4);
     assert.equal(result.progress.phase, "analyzing-snapshots");
 
     const modules = await storage.query.listModulesByAnalysis("analysis-1");
@@ -169,6 +225,17 @@ test("sqlite storage initializes schema and supports writes plus queries", async
     assert.ok(series);
     assert.equal(series.timeline.length, 2);
     assert.deepEqual(series.series[0]?.values, [10, 14]);
+
+    const candles = await storage.query.queryCandles({
+      analysisId: "analysis-1",
+    });
+    assert.ok(candles);
+    assert.deepEqual(candles.series[0]?.values[1], {
+      open: 10,
+      high: 14,
+      low: 9,
+      close: 14,
+    });
 
     const distribution = await storage.query.queryDistribution({
       analysisId: "analysis-1",
@@ -201,17 +268,20 @@ test("replaceAnalysisResult overwrites prior data without duplicates", async () 
       analysisId: "analysis-1",
       snapshots: createSnapshots(),
       points: createPoints(),
+      candles: createCandles(),
     });
 
     await storage.persistence.replaceAnalysisResult({
       analysisId: "analysis-1",
       snapshots: createSnapshots(),
       points: createPoints().filter((point) => point.moduleKey === "rust:crate:core"),
+      candles: createCandles().filter((candle) => candle.moduleKey === "rust:crate:core"),
     });
 
     const result = await storage.query.getAnalysisResult("analysis-1");
     assert.ok(result);
     assert.equal(result.points.length, 2);
+    assert.equal(result.candles.length, 2);
     assert.deepEqual(
       result.points.map((point) => point.moduleKey),
       ["rust:crate:core", "rust:crate:core"],
@@ -231,6 +301,7 @@ test("repository store supports local path lookup and cascading delete", async (
       analysisId: "analysis-1",
       snapshots: createSnapshots(),
       points: createPoints(),
+      candles: createCandles(),
     });
 
     const found = await storage.repositories.getByLocalPath("/tmp/demo");

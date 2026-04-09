@@ -6,6 +6,7 @@ import type {
   AnalysisModuleSummaryDto,
   AnalysisResultDto,
   AnalysisSummaryDto,
+  CandlesResponseDto,
   DistributionResponseDto,
   RepositoryTargetDto,
   SeriesResponseDto,
@@ -47,6 +48,7 @@ type ApiError = {
 
 type AnalysisDetailQueryState = {
   modules: AnalysisModuleSummaryDto[];
+  candles: CandlesResponseDto | null;
   seriesByMetric: Partial<Record<MetricKey, SeriesResponseDto>>;
   distributionsByMetric: Partial<Record<MetricKey, DistributionResponseDto>>;
 };
@@ -166,6 +168,7 @@ export function AnalysisDetailPage({
             }).toString()}`,
           ),
         );
+        const candlesResponse = fetch(`/api/candles?${moduleQuery.toString()}`);
         const distributionResponses = metrics.map((metric) =>
           fetch(
             `/api/distribution?${new URLSearchParams({
@@ -179,6 +182,7 @@ export function AnalysisDetailPage({
         const responses = await Promise.all([
           moduleResponse,
           ...seriesResponses,
+          candlesResponse,
           ...distributionResponses,
         ]);
 
@@ -198,11 +202,12 @@ export function AnalysisDetailPage({
             ]),
           ),
         ) as Partial<Record<MetricKey, SeriesResponseDto>>;
+        const candles = (await responses[1 + metrics.length]!.json()) as CandlesResponseDto;
         const distributionsByMetric = Object.fromEntries(
           await Promise.all(
             metrics.map(async (metric, index) => [
               metric,
-              (await responses[index + 1 + metrics.length]!.json()) as DistributionResponseDto,
+              (await responses[index + 2 + metrics.length]!.json()) as DistributionResponseDto,
             ]),
           ),
         ) as Partial<Record<MetricKey, DistributionResponseDto>>;
@@ -210,6 +215,7 @@ export function AnalysisDetailPage({
         if (!cancelled) {
           setQueryState({
             modules,
+            candles,
             seriesByMetric,
             distributionsByMetric,
           });
@@ -334,24 +340,18 @@ export function AnalysisDetailPage({
       });
     }
 
-    if (queryState?.seriesByMetric.loc) {
+    if (queryState?.candles) {
       cards.push({
         id: "candlestick",
-        title: "模块 K 线视图",
-        description: "把模块 LOC 演化翻译成 K 线语义，用更强的波动感去观察单个模块的变化节奏。",
+        title: "模块 K 线图",
+        description:
+          "回答“一个模块在每个采样桶里如何开盘、收盘、冲到多高、探到多低”，适合看阶段内真实波动。",
         badges: [`候选 ${queryState.modules.length} 个模块`, `当前 ${topModule?.name ?? "-"}`],
-        footer: "这张图不适合总览，但很适合拿来观察重点模块在不同阶段的增长、回撤和波动幅度。",
-        actions: ["模块切换", "K 线语义", "时间窗口"],
+        footer:
+          "这张图现在使用真实 OHLC：每个采样桶都会遍历 bucket 内 commit 级 LOC 路径，再汇总出开高低收。",
+        actions: ["模块切换", "OHLC", "时间窗口"],
         wide: true,
-        content: (
-          <ModuleCandlestickChart
-            seriesByMetric={{
-              loc: queryState.seriesByMetric.loc,
-              added: queryState.seriesByMetric.added,
-              deleted: queryState.seriesByMetric.deleted,
-            }}
-          />
-        ),
+        content: <ModuleCandlestickChart candles={queryState.candles} />,
       });
     }
 

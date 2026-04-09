@@ -89,9 +89,23 @@ export type MetricPoint = {
   churn: number;
 };
 
+export type ModuleCandlePoint = {
+  analysisId: string;
+  ts: string;
+  commit: string;
+  moduleKey: string;
+  moduleName: string;
+  moduleKind: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+};
+
 export type AnalysisResult = {
   job: AnalysisJob;
   progress: AnalysisProgress;
   snapshots: Snapshot[];
   points: MetricPoint[];
+  candles: ModuleCandlePoint[];
 };

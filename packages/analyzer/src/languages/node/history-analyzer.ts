@@ -1,10 +1,17 @@
-import type { AnalysisProgress, MetricPoint, ModuleUnit, Snapshot } from "@code-dance/domain";
+import type {
+  AnalysisProgress,
+  MetricPoint,
+  ModuleCandlePoint,
+  ModuleUnit,
+  Snapshot,
+} from "@code-dance/domain";
 import {
+  bucketCommits,
   detectNodeModulesAtRevision,
   listCommits,
   readNumstatBetweenRevisions,
-  sampleCommits,
   type DiffStatRow,
+  type GitCommit,
 } from "@code-dance/git";
 
 import type {
@@ -59,7 +66,8 @@ export async function analyzeNodeHistory(
     updatedAt: new Date().toISOString(),
   });
 
-  const sampledCommits = sampleCommits(commits, input.sampling);
+  const commitBuckets = bucketCommits(commits, input.sampling);
+  const sampledCommits = commitBuckets.map((bucket) => bucket[bucket.length - 1]!);
 
   if (sampledCommits.length === 0) {
     throw new Error("no commits found for analysis");
@@ -82,23 +90,18 @@ export async function analyzeNodeHistory(
 
   const snapshots: Snapshot[] = [];
   const points: MetricPoint[] = [];
+  const candles: ModuleCandlePoint[] = [];
   const previousModulesByKey = new Map<string, { name: string; kind: string }>();
 
   for (let snapshotIndex = 0; snapshotIndex < sampledCommits.length; snapshotIndex += 1) {
     throwIfAborted(input.abortSignal);
     const commit = sampledCommits[snapshotIndex]!;
+    const bucket = commitBuckets[snapshotIndex]!;
     const previousCommit = sampledCommits[snapshotIndex - 1] ?? null;
-    const modules = (await detectNodeModulesAtRevision(input.localPath, commit.hash)).filter(
-      (module) => module.files.length > 0,
-    );
-    throwIfAborted(input.abortSignal);
-    const currentModulesByKey = new Map(modules.map((module) => [module.key, module]));
-    const locFiles = countDistinctModuleFiles(modules);
     const diffRows =
       previousCommit === null
         ? []
         : await readNumstatBetweenRevisions(input.localPath, previousCommit.hash, commit.hash);
-    const totalWorkUnits = locFiles + diffRows.length;
 
     snapshots.push({
       analysisId: input.analysisId,
@@ -107,30 +110,63 @@ export async function analyzeNodeHistory(
     });
 
     let processedWorkUnits = 0;
+    let totalWorkUnits = diffRows.length;
     const currentSnapshotStartedAtMs = Date.now();
-    const moduleNameByKey = new Map(modules.map((module) => [module.key, module.name]));
-    const locByModule = await countModuleLocAtRevision({
-      localPath: input.localPath,
-      revision: commit.hash,
-      modules,
-      abortSignal: input.abortSignal,
-      onFileProcessed: async ({ moduleKey }) => {
-        throwIfAborted(input.abortSignal);
-        processedWorkUnits += 1;
-        await publishSnapshotProgress({
-          input,
-          totalCommits: commits.length,
-          sampledCommits: sampledCommits.length,
-          snapshotIndex,
-          currentCommit: commit.hash,
-          currentModule: moduleNameByKey.get(moduleKey) ?? null,
-          currentFiles: totalWorkUnits,
-          processedFiles: processedWorkUnits,
-          startedAtMs,
-          currentSnapshotStartedAtMs,
-        });
-      },
-    });
+    const bucketStates: Array<{
+      commit: GitCommit;
+      locByModule: Map<string, number>;
+    }> = [];
+    const bucketModuleMetaByKey = new Map<string, { name: string; kind: string }>();
+    let modules: ModuleUnit[] = [];
+    let locByModule = new Map<string, number>();
+
+    for (const bucketCommit of bucket) {
+      throwIfAborted(input.abortSignal);
+      const bucketModules = (await detectNodeModulesAtRevision(input.localPath, bucketCommit.hash)).filter(
+        (module) => module.files.length > 0,
+      );
+      throwIfAborted(input.abortSignal);
+      totalWorkUnits += countDistinctModuleFiles(bucketModules);
+      const moduleNameByKey = new Map(bucketModules.map((module) => [module.key, module.name]));
+      const locAtCommit = await countModuleLocAtRevision({
+        localPath: input.localPath,
+        revision: bucketCommit.hash,
+        modules: bucketModules,
+        abortSignal: input.abortSignal,
+        onFileProcessed: async ({ moduleKey }) => {
+          throwIfAborted(input.abortSignal);
+          processedWorkUnits += 1;
+          await publishSnapshotProgress({
+            input,
+            totalCommits: commits.length,
+            sampledCommits: sampledCommits.length,
+            snapshotIndex,
+            currentCommit: commit.hash,
+            currentModule: moduleNameByKey.get(moduleKey) ?? null,
+            currentFiles: totalWorkUnits,
+            processedFiles: processedWorkUnits,
+            startedAtMs,
+            currentSnapshotStartedAtMs,
+          });
+        },
+      });
+
+      for (const module of bucketModules) {
+        bucketModuleMetaByKey.set(module.key, { name: module.name, kind: module.kind });
+      }
+
+      bucketStates.push({
+        commit: bucketCommit,
+        locByModule: locAtCommit,
+      });
+
+      if (bucketCommit.hash === commit.hash) {
+        modules = bucketModules;
+        locByModule = locAtCommit;
+      }
+    }
+
+    const currentModulesByKey = new Map(modules.map((module) => [module.key, module]));
 
     const diffMetricsByModule = new Map<
       string,
@@ -201,6 +237,16 @@ export async function analyzeNodeHistory(
       });
     }
 
+    candles.push(
+      ...buildObservedCandles({
+        analysisId: input.analysisId,
+        ts: commit.committedAt,
+        commit: commit.hash,
+        states: bucketStates,
+        moduleMetaByKey: bucketModuleMetaByKey,
+      }),
+    );
+
     for (const [moduleKey, previousModule] of previousModulesByKey.entries()) {
       if (currentModulesByKey.has(moduleKey)) {
         continue;
@@ -268,6 +314,14 @@ export async function analyzeNodeHistory(
 
       return left.moduleKey.localeCompare(right.moduleKey);
     }),
+    candles: candles.sort((left, right) => {
+      const tsOrder = left.ts.localeCompare(right.ts);
+      if (tsOrder !== 0) {
+        return tsOrder;
+      }
+
+      return left.moduleKey.localeCompare(right.moduleKey);
+    }),
   };
 }
 
@@ -302,6 +356,50 @@ function createModuleAttributionResolver(modules: ModuleUnit[]) {
 
 function resolveDiffAttributionPath(diffRow: DiffStatRow): string | null {
   return diffRow.newPath ?? diffRow.oldPath;
+}
+
+function buildObservedCandles(input: {
+  analysisId: string;
+  ts: string;
+  commit: string;
+  states: Array<{ commit: GitCommit; locByModule: Map<string, number> }>;
+  moduleMetaByKey: Map<string, { name: string; kind: string }>;
+}): ModuleCandlePoint[] {
+  const firstState = input.states[0];
+  const lastState = input.states[input.states.length - 1];
+  if (!firstState || !lastState) {
+    return [];
+  }
+
+  const moduleKeys = new Set<string>();
+  for (const state of input.states) {
+    for (const moduleKey of state.locByModule.keys()) {
+      moduleKeys.add(moduleKey);
+    }
+  }
+
+  return Array.from(moduleKeys)
+    .map((moduleKey) => {
+      const meta = input.moduleMetaByKey.get(moduleKey);
+      if (!meta) {
+        return null;
+      }
+
+      const observed = input.states.map((state) => state.locByModule.get(moduleKey) ?? 0);
+      return {
+        analysisId: input.analysisId,
+        ts: input.ts,
+        commit: input.commit,
+        moduleKey,
+        moduleName: meta.name,
+        moduleKind: meta.kind,
+        open: firstState.locByModule.get(moduleKey) ?? 0,
+        high: observed.reduce((max, value) => Math.max(max, value), 0),
+        low: observed.reduce((min, value) => Math.min(min, value), Number.POSITIVE_INFINITY),
+        close: lastState.locByModule.get(moduleKey) ?? 0,
+      };
+    })
+    .filter((candle): candle is ModuleCandlePoint => candle !== null);
 }
 
 function moduleRootDepth(rootPath: string): number {

@@ -105,6 +105,19 @@ export const metricPointSchema = z.object({
   churn: z.number(),
 });
 
+export const moduleCandlePointSchema = z.object({
+  analysisId: z.string(),
+  ts: z.string(),
+  commit: z.string(),
+  moduleKey: z.string(),
+  moduleName: z.string(),
+  moduleKind: z.string(),
+  open: z.number(),
+  high: z.number(),
+  low: z.number(),
+  close: z.number(),
+});
+
 export const createAnalysisRequestSchema = z.object({
   repositoryId: z.string().min(1),
   branch: z.string().min(1).optional(),
@@ -135,6 +148,31 @@ export const seriesResponseSchema = z.object({
   metric: analysisMetricSchema,
   timeline: z.array(snapshotSummarySchema),
   series: z.array(seriesModuleSchema),
+});
+
+export const candlesQuerySchema = z.object({
+  analysisId: z.string().min(1),
+  moduleKeys: z.array(z.string().min(1)).default([]),
+});
+
+export const candleSeriesSchema = z.object({
+  moduleKey: z.string(),
+  moduleName: z.string(),
+  moduleKind: z.string(),
+  values: z.array(
+    z.object({
+      open: z.number(),
+      high: z.number(),
+      low: z.number(),
+      close: z.number(),
+    }),
+  ),
+});
+
+export const candlesResponseSchema = z.object({
+  analysisId: z.string(),
+  timeline: z.array(snapshotSummarySchema),
+  series: z.array(candleSeriesSchema),
 });
 
 export const distributionQuerySchema = z.object({
@@ -179,6 +217,7 @@ export const analysisResultSchema = z.object({
   progress: analysisProgressSchema,
   snapshots: z.array(snapshotSchema),
   points: z.array(metricPointSchema),
+  candles: z.array(moduleCandlePointSchema),
 });
 
 export const analysisSummarySchema = z.object({
@@ -201,6 +240,7 @@ export type AnalysisJobDto = z.infer<typeof analysisJobSchema>;
 export type SnapshotDto = z.infer<typeof snapshotSchema>;
 export type SnapshotSummaryDto = z.infer<typeof snapshotSummarySchema>;
 export type MetricPointDto = z.infer<typeof metricPointSchema>;
+export type ModuleCandlePointDto = z.infer<typeof moduleCandlePointSchema>;
 export type AnalysisProgressDto = z.infer<typeof analysisProgressSchema>;
 export type AnalysisSamplingDto = z.infer<typeof analysisSamplingSchema>;
 export type CreateAnalysisRequestDto = z.infer<typeof createAnalysisRequestSchema>;
@@ -209,6 +249,9 @@ export type AnalysisModuleSummaryDto = z.infer<typeof analysisModuleSummarySchem
 export type SeriesQueryDto = z.infer<typeof seriesQuerySchema>;
 export type SeriesModuleDto = z.infer<typeof seriesModuleSchema>;
 export type SeriesResponseDto = z.infer<typeof seriesResponseSchema>;
+export type CandlesQueryDto = z.infer<typeof candlesQuerySchema>;
+export type CandleSeriesDto = z.infer<typeof candleSeriesSchema>;
+export type CandlesResponseDto = z.infer<typeof candlesResponseSchema>;
 export type DistributionQueryDto = z.infer<typeof distributionQuerySchema>;
 export type DistributionItemDto = z.infer<typeof distributionItemSchema>;
 export type DistributionResponseDto = z.infer<typeof distributionResponseSchema>;

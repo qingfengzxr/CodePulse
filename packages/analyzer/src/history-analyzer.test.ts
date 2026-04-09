@@ -277,6 +277,7 @@ test("aggregate analyzer fails when snapshot timelines do not match", async () =
       { analysisId: "a1", commit: "bbb222", ts: "2026-04-08T00:00:00.000Z" },
     ],
     points: [],
+    candles: [],
   };
   const mismatch: AnalyzeRepositoryHistoryOutput = {
     snapshots: [
@@ -284,6 +285,7 @@ test("aggregate analyzer fails when snapshot timelines do not match", async () =
       { analysisId: "a1", commit: "ccc333", ts: "2026-04-15T00:00:00.000Z" },
     ],
     points: [],
+    candles: [],
   };
 
   await assert.rejects(
