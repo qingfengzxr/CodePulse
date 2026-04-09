@@ -140,6 +140,7 @@ pnpm dev:web
 
 - [总体架构](./docs/design/0.architecture.md)
 - [可视化视图设计](./docs/design/visual/01-views.md)
+- [Web 多语言与主题设计](./docs/design/web/01-i18n-and-theme.md)
 - [SQLite Schema](./docs/design/storage/01-sqlite-schema.md)
 - [Analyzer 实现说明](./packages/analyzer/docs/implementation.md)
 - [Analyzer 性能与并发设计](./packages/analyzer/docs/performance-and-concurrency.md)

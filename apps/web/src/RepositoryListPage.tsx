@@ -151,6 +151,11 @@ export function RepositoryListPage({
               analysesByRepositoryAndSampling[`${repository.id}:${selectedSampling}`];
             const latestSnapshot = analysis?.latestSnapshot ?? null;
             const statusLabel = analysis ? analysis.job.status : "idle";
+            const hasDetailResult = analysis
+              ? analysis.job.status === "done" &&
+                analysis.snapshotCount > 0 &&
+                latestSnapshot !== null
+              : false;
 
             return (
               <article className="repository-card" key={repository.id}>
@@ -219,7 +224,7 @@ export function RepositoryListPage({
                         ? "分析中..."
                         : `运行 ${getSamplingLabel(selectedSampling)} 分析`}
                     </button>
-                    {analysis ? (
+                    {hasDetailResult && analysis ? (
                       <Link
                         className="ghost-button detail-link-button"
                         to={`/analyses/${analysis.job.id}`}
@@ -265,7 +270,7 @@ export function RepositoryListPage({
                   ) : null}
                 </div>
 
-                {analysis ? (
+                {hasDetailResult && analysis ? (
                   <Link
                     className="repository-card-footer repository-card-footer-link-wrap"
                     to={`/analyses/${analysis.job.id}`}

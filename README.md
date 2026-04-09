@@ -140,6 +140,7 @@ Core docs:
 
 - [Architecture](./docs/design/0.architecture.md)
 - [Visualization Views](./docs/design/visual/01-views.md)
+- [Web I18n and Theme Design](./docs/design/web/01-i18n-and-theme.md)
 - [SQLite Schema](./docs/design/storage/01-sqlite-schema.md)
 - [Analyzer Implementation](./packages/analyzer/docs/implementation.md)
 - [Analyzer Performance and Concurrency](./packages/analyzer/docs/performance-and-concurrency.md)
