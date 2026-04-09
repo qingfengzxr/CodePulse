@@ -104,34 +104,32 @@ export function RepositoryListPage({
         </div>
       </section>
 
-      <section className="surface-section intake-section">
-        <div className="section-heading section-heading-inline">
-          <div>
-            <p className="section-kicker">Registry</p>
-            <h2>添加本地仓库</h2>
-            <p className="section-description">把仓库接入工作台后，就能按采样粒度运行分析并跟踪结果。</p>
-          </div>
-          <button className="secondary-button" onClick={() => void onRefreshWorkspace()} type="button">
-            刷新工作区
-          </button>
+      <section className="surface-section intake-strip">
+        <div className="intake-strip-mark">+</div>
+        <div className="intake-strip-copy">
+          <p className="section-kicker">Registry</p>
+          <h2>添加本地仓库</h2>
+          <p className="section-description">输入本地 Git 路径后，立即纳入工作台进行采样分析与结果追踪。</p>
         </div>
-
-        <form className="intake-form" onSubmit={onSubmit}>
+        <form className="intake-form intake-form-inline" onSubmit={onSubmit}>
           <label className="sr-only" htmlFor="localPath">
             本地仓库绝对路径
           </label>
           <input
             id="localPath"
             onChange={(event) => onUpdateLocalPath(event.target.value)}
-            placeholder="/home/zxr/work/github/some-rust-repo"
+            placeholder="Absolute path..."
             required
             type="text"
             value={localPath}
           />
           <button className="primary-button" disabled={submitting} type="submit">
-            {submitting ? "添加中..." : "添加仓库"}
+            {submitting ? "添加中..." : "Add Repository"}
           </button>
         </form>
+        <button className="secondary-button intake-refresh" onClick={() => void onRefreshWorkspace()} type="button">
+          刷新
+        </button>
 
         {error ? <p className="feedback error">{error}</p> : null}
       </section>
@@ -164,7 +162,7 @@ export function RepositoryListPage({
         ) : null}
 
         {!loading && repositories.length > 0 ? (
-          <div className="repository-stack">
+          <div className="repository-grid">
             {repositories.map((repository) => {
               const selectedSampling = selectedSamplingByRepository[repository.id] ?? "weekly";
               const analysis =
@@ -178,66 +176,58 @@ export function RepositoryListPage({
               );
               const loadingKey = `${repository.id}:${selectedSampling}`;
               const moduleCount = moduleResults[repository.id]?.length ?? null;
+              const primaryActionLabel = hasDetailResult && analysis ? "查看演化" : "开始分析";
 
               return (
-                <article className="repository-card" key={repository.id}>
-                  <div className="repository-card-main">
-                    <div className="repository-card-header">
-                      <div>
-                        <p className="repository-kind">{repository.detectedKinds.join(", ")}</p>
-                        <h3>{repository.name}</h3>
-                      </div>
-                      <span className={`status-pill status-${repository.status}`}>
-                        {repository.status}
-                      </span>
+                <article className="repository-tile" key={repository.id}>
+                  <div className="repository-tile-head">
+                    <div>
+                      <p className="repository-kind">{repository.detectedKinds.join(", ")}</p>
+                      <h3>{repository.name}</h3>
                     </div>
+                    <span className={`status-pill status-${repository.status}`}>
+                      {analysis?.job.status === "done" ? "analyzed" : analysis?.job.status ?? repository.status}
+                    </span>
+                  </div>
 
-                    <p className="repository-path" title={repository.localPath ?? undefined}>
-                      {repository.localPath}
-                    </p>
+                  <p className="repository-path repository-path-compact" title={repository.localPath ?? undefined}>
+                    {repository.localPath}
+                  </p>
 
-                    <div className="meta-chip-row">
-                      <span className="meta-chip">默认分支 {repository.defaultBranch ?? "unknown"}</span>
-                      <span className="meta-chip">任务状态 {analysis?.job.status ?? "idle"}</span>
-                      {moduleCount !== null ? <span className="meta-chip">模块 {moduleCount}</span> : null}
+                  <div className="repository-metrics">
+                    <div className="repository-metric">
+                      <span>Branch</span>
+                      <strong>{repository.defaultBranch ?? "unknown"}</strong>
                     </div>
-
-                    <div className="repository-facts">
-                      <div className="fact-card">
-                        <span>当前采样</span>
-                        <strong>{getSamplingLabel(selectedSampling)}</strong>
-                      </div>
-                      <div className="fact-card">
-                        <span>最新采样</span>
-                        <strong>{latestSnapshot?.ts.slice(0, 10) ?? "-"}</strong>
-                      </div>
-                      <div className="fact-card">
-                        <span>采样点</span>
-                        <strong>{analysis?.snapshotCount ?? 0}</strong>
-                      </div>
-                      <div className="fact-card">
-                        <span>最近提交</span>
-                        <strong>{latestSnapshot?.commit.slice(0, 7) ?? "-"}</strong>
-                      </div>
-                    </div>
-
-                    <div className="repository-status-block">
-                      {analysis ? (
-                        analysis.job.status === "pending" || analysis.job.status === "running" ? (
-                          <ProgressBar analysis={analysis} />
-                        ) : (
-                          <p className="feedback">当前采样结果已就绪，可以进入详情页继续查看。</p>
-                        )
-                      ) : (
-                        <p className="feedback">当前采样还没有分析结果，右侧可直接发起任务。</p>
-                      )}
+                    <div className="repository-metric">
+                      <span>Last Activity</span>
+                      <strong>{latestSnapshot?.ts.slice(0, 10).replaceAll("-", "/") ?? "N/A"}</strong>
                     </div>
                   </div>
 
-                  <aside className="repository-card-side">
-                    <div className="control-block">
-                      <span className="control-label">采样粒度</span>
-                      <div className="segmented-control">
+                  <div className="repository-metrics repository-metrics-secondary">
+                    <div className="repository-metric">
+                      <span>Modules</span>
+                      <strong>{moduleCount ?? "-"}</strong>
+                    </div>
+                    <div className="repository-metric">
+                      <span>Snapshots</span>
+                      <strong>{analysis?.snapshotCount ?? 0}</strong>
+                    </div>
+                  </div>
+
+                  {analysis?.job.status === "pending" || analysis?.job.status === "running" ? (
+                    <div className="repository-status-inline">
+                      <ProgressBar analysis={analysis} />
+                    </div>
+                  ) : null}
+
+                  <div className="repository-tile-footer">
+                    <div className="repository-tile-footer-meta">
+                      <span>{analysis ? "Ready for scan" : "Idle"}</span>
+                    </div>
+                    <div className="repository-tile-footer-actions">
+                      <div className="segmented-control segmented-control-compact">
                         {samplingOptions.map((sampling) => (
                           <button
                             className={`segmented-option ${selectedSampling === sampling ? "active" : ""}`}
@@ -249,45 +239,42 @@ export function RepositoryListPage({
                           </button>
                         ))}
                       </div>
-                    </div>
-
-                    <div className="repository-actions">
-                      <button
-                        className="primary-button card-primary-action"
-                        disabled={Boolean(analysisLoading[loadingKey])}
-                        onClick={() => void onRunAnalysis(repository, selectedSampling)}
-                        type="button"
-                      >
-                        {analysisLoading[loadingKey]
-                          ? "分析中..."
-                          : `运行 ${getSamplingLabel(selectedSampling)} 分析`}
-                      </button>
-                      <button
-                        className="secondary-button"
-                        onClick={() => void onLoadModules(repository.id)}
-                        type="button"
-                      >
-                        {moduleLoading[repository.id] ? "探测中..." : "探测模块"}
-                      </button>
-                      <Link className="secondary-button" to={`/repositories/${repository.id}/modules`}>
-                        模块清单
-                      </Link>
                       {hasDetailResult && analysis ? (
-                        <Link className="secondary-button" to={`/analyses/${analysis.job.id}`}>
-                          查看结果
+                        <Link className="repository-inline-link" to={`/analyses/${analysis.job.id}`}>
+                          {primaryActionLabel}
                         </Link>
                       ) : (
-                        <span className="secondary-button is-static">暂无结果</span>
+                        <button
+                          className="repository-inline-link repository-inline-link-button"
+                          disabled={Boolean(analysisLoading[loadingKey])}
+                          onClick={() => void onRunAnalysis(repository, selectedSampling)}
+                          type="button"
+                        >
+                          {analysisLoading[loadingKey] ? "分析中..." : primaryActionLabel}
+                        </button>
                       )}
-                      <button
-                        className="danger-button"
-                        onClick={() => void onDeleteRepository(repository)}
-                        type="button"
-                      >
-                        {deleteLoading[repository.id] ? "删除中..." : "删除仓库"}
-                      </button>
                     </div>
-                  </aside>
+                  </div>
+
+                  <div className="repository-card-aux-actions">
+                    <button
+                      className="secondary-button"
+                      onClick={() => void onLoadModules(repository.id)}
+                      type="button"
+                    >
+                      {moduleLoading[repository.id] ? "探测中..." : "探测模块"}
+                    </button>
+                    <Link className="secondary-button" to={`/repositories/${repository.id}/modules`}>
+                      模块清单
+                    </Link>
+                    <button
+                      className="danger-button"
+                      onClick={() => void onDeleteRepository(repository)}
+                      type="button"
+                    >
+                      {deleteLoading[repository.id] ? "删除中..." : "删除"}
+                    </button>
+                  </div>
                 </article>
               );
             })}
