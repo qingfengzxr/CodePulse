@@ -279,6 +279,36 @@ export function buildStackedAreaSeriesFromQuery(
   };
 }
 
+export function buildPercentageStackedAreaSeriesFromQuery(
+  series: SeriesResponseDto,
+  visibleLimit: number | "all",
+): {
+  xAxis: string[];
+  modules: Array<{ key: string; name: string; values: number[] }>;
+  collapsedCount: number;
+} {
+  const base = buildStackedAreaSeriesFromQuery(series, visibleLimit);
+  const totals = base.xAxis.map((_, index) =>
+    base.modules.reduce((sum, module) => sum + (module.values[index] ?? 0), 0),
+  );
+
+  return {
+    xAxis: base.xAxis,
+    collapsedCount: base.collapsedCount,
+    modules: base.modules.map((module) => ({
+      ...module,
+      values: module.values.map((value, index) => {
+        const total = totals[index] ?? 0;
+        if (total <= 0) {
+          return 0;
+        }
+
+        return Number(((value / total) * 100).toFixed(2));
+      }),
+    })),
+  };
+}
+
 export function buildCurrentRankingFromQuery(ranking: RankingResponseDto): RankingEntry[] {
   return [...ranking.items]
     .map((item) => ({
@@ -294,6 +324,37 @@ export function buildCurrentRankingFromQuery(ranking: RankingResponseDto): Ranki
 
       return left.name.localeCompare(right.name);
     });
+}
+
+export function buildHeatmapSeriesFromQuery(
+  series: SeriesResponseDto,
+  visibleLimit: number | "all",
+): {
+  xAxis: string[];
+  yAxis: string[];
+  maxValue: number;
+  data: Array<[number, number, number]>;
+} {
+  const { xAxis, modules } = buildMetricSeriesFromQuery(series);
+  const visibleModules =
+    visibleLimit === "all" ? modules : modules.slice(0, Math.max(1, visibleLimit));
+  const yAxis = visibleModules.map((module) => module.name);
+  const data: Array<[number, number, number]> = [];
+  let maxValue = 0;
+
+  for (const [yIndex, module] of visibleModules.entries()) {
+    for (const [xIndex, value] of module.values.entries()) {
+      data.push([xIndex, yIndex, value]);
+      maxValue = Math.max(maxValue, value);
+    }
+  }
+
+  return {
+    xAxis,
+    yAxis,
+    maxValue,
+    data,
+  };
 }
 
 export function getLatestSnapshotFromSeries(series: SeriesResponseDto) {
@@ -358,6 +419,63 @@ export function buildCandlestickSeriesFromQueries(input: {
         kind: module.kind,
         candles,
         closes: module.values,
+      };
+    }),
+  };
+}
+
+export function buildBumpChartSeriesFromQuery(
+  series: SeriesResponseDto,
+  visibleLimit: number | "all",
+): {
+  xAxis: string[];
+  maxRank: number;
+  modules: Array<{
+    key: string;
+    name: string;
+    kind: string;
+    ranks: number[];
+    latestRank: number;
+    bestRank: number;
+  }>;
+} {
+  const { xAxis, modules } = buildMetricSeriesFromQuery(series);
+  const visibleModules =
+    visibleLimit === "all" ? modules : modules.slice(0, Math.max(1, visibleLimit));
+
+  const rankByModuleAndIndex = new Map<string, number[]>();
+
+  for (let index = 0; index < xAxis.length; index += 1) {
+    const rankedAtIndex = [...modules].sort((left, right) => {
+      const leftValue = left.values[index] ?? 0;
+      const rightValue = right.values[index] ?? 0;
+      if (rightValue !== leftValue) {
+        return rightValue - leftValue;
+      }
+
+      return left.name.localeCompare(right.name);
+    });
+
+    for (const [rankIndex, module] of rankedAtIndex.entries()) {
+      const current = rankByModuleAndIndex.get(module.key) ?? [];
+      current[index] = rankIndex + 1;
+      rankByModuleAndIndex.set(module.key, current);
+    }
+  }
+
+  return {
+    xAxis,
+    maxRank: modules.length,
+    modules: visibleModules.map((module) => {
+      const ranks = rankByModuleAndIndex.get(module.key) ?? xAxis.map(() => modules.length);
+
+      return {
+        key: module.key,
+        name: module.name,
+        kind: module.kind,
+        ranks,
+        latestRank: ranks.at(-1) ?? modules.length,
+        bestRank: ranks.reduce((best, rank) => Math.min(best, rank), Number.POSITIVE_INFINITY),
       };
     }),
   };

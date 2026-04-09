@@ -19,7 +19,10 @@ import {
   type MetricKey,
 } from "./analysis-data";
 import { ModuleCandlestickChart } from "./charts/ModuleCandlestickChart";
+import { ModuleBumpChart } from "./charts/ModuleBumpChart";
+import { ModuleChurnHeatmapChart } from "./charts/ModuleChurnHeatmapChart";
 import { ModuleRankingChart } from "./charts/ModuleRankingChart";
+import { ModuleShareStackedAreaChart } from "./charts/ModuleShareStackedAreaChart";
 import { ModuleStackedAreaChart } from "./charts/ModuleStackedAreaChart";
 import { ModuleTrendChart } from "./charts/ModuleTrendChart";
 import { RepositoryScaleChart } from "./charts/RepositoryScaleChart";
@@ -292,6 +295,17 @@ export function AnalysisDetailPage({
       });
 
       cards.push({
+        id: "share-stacked-area",
+        title: "模块占比 100% 堆叠面积图",
+        description: "回答“谁正在吞噬份额、结构迁移有多快”，把绝对 LOC 变化折叠成百分比结构变化。",
+        badges: ["结构视角", "100% 归一化", `${locSeries.series.length} 个模块`],
+        footer: "当你只关心份额变化而不是总量扩张时，这张图比普通堆叠面积图更有效。",
+        actions: ["份额迁移", "Top N", "结构对比"],
+        wide: true,
+        content: <ModuleShareStackedAreaChart series={locSeries} />,
+      });
+
+      cards.push({
         id: "ranking",
         title: "当前模块排行",
         description: "回答“此刻谁最大、谁最活跃”，把当前时间点的模块规模或变更量直接排出来。",
@@ -299,6 +313,24 @@ export function AnalysisDetailPage({
         footer: "这张图最适合做入口：先定位重点模块，再进入模块趋势图查看长期演化。",
         actions: ["切换指标", "Top N", "当前快照"],
         content: <ModuleRankingChart analysisId={currentAnalysis.job.id} />,
+      });
+    }
+
+    if (queryState?.seriesByMetric.churn) {
+      cards.push({
+        id: "churn-heatmap",
+        title: "Churn 热力图",
+        description:
+          "回答“哪个阶段最动荡、热点从哪里迁移到哪里”，适合先扫时间热点，再深入具体模块。",
+        badges: [
+          "时间 x 模块",
+          "颜色代表 churn",
+          `${queryState.seriesByMetric.churn.series.length} 个模块`,
+        ],
+        footer: "热力图不擅长精确读值，但极适合发现重构窗口和高频活跃模块。",
+        actions: ["热点扫描", "阶段定位", "模块迁移"],
+        wide: true,
+        content: <ModuleChurnHeatmapChart series={queryState.seriesByMetric.churn} />,
       });
     }
 
@@ -320,6 +352,19 @@ export function AnalysisDetailPage({
             }}
           />
         ),
+      });
+    }
+
+    if (queryState?.seriesByMetric.loc) {
+      cards.push({
+        id: "bump-chart",
+        title: "Top N 模块 Bump Chart",
+        description: "回答“谁在上升、谁在掉队”，把时间序列翻译成排名轨迹，更适合讲地位变化。",
+        badges: ["排名视角", "Top N", "loc / churn"],
+        footer: "当你关心模块地位而不是绝对数值时，Bump Chart 的表达会比折线图更直接。",
+        actions: ["排名轨迹", "Top N", "loc / churn"],
+        wide: true,
+        content: <ModuleBumpChart seriesByMetric={queryState.seriesByMetric} />,
       });
     }
 
