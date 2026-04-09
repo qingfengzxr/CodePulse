@@ -133,7 +133,9 @@ export function RepositoryListPage({
             <p className="panel-kicker">Registry</p>
             <h2>已注册仓库</h2>
           </div>
-          <span className="stat-chip">每张卡片独立切换采样，已注册 {repositories.length} 个仓库</span>
+          <span className="stat-chip">
+            每张卡片独立切换采样，已注册 {repositories.length} 个仓库
+          </span>
         </div>
 
         {loading ? <p className="feedback">加载中...</p> : null}

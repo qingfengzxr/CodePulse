@@ -17,7 +17,11 @@ import {
   seriesResponseSchema,
   analysisModuleSummarySchema,
 } from "@code-dance/contracts";
-import { analyzeRepositoryHistory, detectRepositoryModules } from "@code-dance/analyzer";
+import {
+  AnalysisAbortedError,
+  analyzeRepositoryHistory,
+  detectRepositoryModules,
+} from "@code-dance/analyzer";
 import { probeLocalRepository } from "@code-dance/git";
 import { createSqliteStorage, defaultDatabasePath, type SqliteStorage } from "@code-dance/storage";
 
@@ -34,6 +38,10 @@ export function createServer(deps: CreateServerDeps = {}) {
     deps.analyzeRepositoryHistoryImpl ?? analyzeRepositoryHistory;
   const detectRepositoryModulesImpl = deps.detectRepositoryModulesImpl ?? detectRepositoryModules;
   const probeLocalRepositoryImpl = deps.probeLocalRepositoryImpl ?? probeLocalRepository;
+  const activeAnalysisTasks = new Map<
+    string,
+    { controller: AbortController; repositoryId: string; promise: Promise<void> }
+  >();
 
   const app = Fastify({
     logger: true,
@@ -46,12 +54,19 @@ export function createServer(deps: CreateServerDeps = {}) {
   app.addHook("onReady", async () => {
     await resumeInterruptedAnalyses({
       app,
+      activeAnalysisTasks,
       storage,
       analyzeRepositoryHistoryImpl,
     });
   });
 
   app.addHook("onClose", async () => {
+    await Promise.all(
+      Array.from(activeAnalysisTasks.values(), (task) => {
+        task.controller.abort();
+        return task.promise.catch(() => undefined);
+      }),
+    );
     storage.close();
   });
 
@@ -113,20 +128,7 @@ export function createServer(deps: CreateServerDeps = {}) {
       return sendApiError(reply, 404, "repository_not_found", "repository was not found");
     }
 
-    const summaries = await storage.query.listAnalysisSummaries();
-    const activeAnalysis = summaries.find(
-      (summary) =>
-        summary.job.repositoryId === params.id &&
-        (summary.job.status === "pending" || summary.job.status === "running"),
-    );
-    if (activeAnalysis) {
-      return sendApiError(
-        reply,
-        409,
-        "repository_has_active_analysis",
-        `repository has an active analysis: ${activeAnalysis.job.id}`,
-      );
-    }
+    await cancelAnalysesForRepository(activeAnalysisTasks, params.id);
 
     await storage.repositories.deleteById(params.id);
     return reply.code(204).send();
@@ -336,7 +338,7 @@ export function createServer(deps: CreateServerDeps = {}) {
     await storage.analysisJobs.create(initialRecord.job);
     await storage.analysisJobs.upsertProgress(analysisId, initialRecord.progress);
 
-    void runAnalysisTask({
+    registerAnalysisTask(activeAnalysisTasks, {
       storage,
       analyzeRepositoryHistoryImpl,
       analysisId,
@@ -357,6 +359,7 @@ export function createServer(deps: CreateServerDeps = {}) {
 async function runAnalysisTask(input: {
   storage: SqliteStorage;
   analyzeRepositoryHistoryImpl: typeof analyzeRepositoryHistory;
+  abortSignal: AbortSignal;
   analysisId: string;
   repositoryId: string;
   localPath: string;
@@ -365,6 +368,7 @@ async function runAnalysisTask(input: {
   detectedKinds: Array<"rust" | "node" | "go" | "python" | "unknown">;
   startedAt: string;
 }) {
+  throwIfTaskAborted(input.abortSignal);
   await input.storage.analysisJobs.updateJob(input.analysisId, (current) => ({
     ...current,
     status: "running",
@@ -392,16 +396,20 @@ async function runAnalysisTask(input: {
       sampling: input.sampling,
       detectedKinds: input.detectedKinds,
       startedAt: input.startedAt,
+      abortSignal: input.abortSignal,
       onProgress: async (progress) => {
+        throwIfTaskAborted(input.abortSignal);
         await input.storage.analysisJobs.updateJob(input.analysisId, (current) => ({
           ...current,
           status:
             progress.phase === "failed" ? "failed" : progress.phase === "done" ? "done" : "running",
         }));
         await input.storage.analysisJobs.upsertProgress(input.analysisId, progress);
+        throwIfTaskAborted(input.abortSignal);
       },
     });
 
+    throwIfTaskAborted(input.abortSignal);
     await input.storage.persistence.replaceAnalysisResult({
       analysisId: input.analysisId,
       snapshots: result.snapshots,
@@ -430,6 +438,10 @@ async function runAnalysisTask(input: {
       updatedAt: finishedAt,
     });
   } catch (error) {
+    if (isTaskAbortError(error)) {
+      return;
+    }
+
     const finishedAt = new Date().toISOString();
     await input.storage.analysisJobs.updateJob(input.analysisId, (current) => ({
       ...current,
@@ -458,6 +470,10 @@ async function runAnalysisTask(input: {
 
 async function resumeInterruptedAnalyses(input: {
   app: FastifyInstance;
+  activeAnalysisTasks: Map<
+    string,
+    { controller: AbortController; repositoryId: string; promise: Promise<void> }
+  >;
   storage: SqliteStorage;
   analyzeRepositoryHistoryImpl: typeof analyzeRepositoryHistory;
 }) {
@@ -502,7 +518,7 @@ async function resumeInterruptedAnalyses(input: {
       "resuming interrupted analysis after server restart",
     );
 
-    void runAnalysisTask({
+    registerAnalysisTask(input.activeAnalysisTasks, {
       storage: input.storage,
       analyzeRepositoryHistoryImpl: input.analyzeRepositoryHistoryImpl,
       analysisId: summary.job.id,
@@ -514,6 +530,56 @@ async function resumeInterruptedAnalyses(input: {
       startedAt: summary.progress.startedAt,
     });
   }
+}
+
+function registerAnalysisTask(
+  activeAnalysisTasks: Map<
+    string,
+    { controller: AbortController; repositoryId: string; promise: Promise<void> }
+  >,
+  input: Omit<Parameters<typeof runAnalysisTask>[0], "abortSignal">,
+) {
+  const controller = new AbortController();
+  const promise = runAnalysisTask({
+    ...input,
+    abortSignal: controller.signal,
+  }).finally(() => {
+    activeAnalysisTasks.delete(input.analysisId);
+  });
+
+  activeAnalysisTasks.set(input.analysisId, {
+    controller,
+    repositoryId: input.repositoryId,
+    promise,
+  });
+}
+
+async function cancelAnalysesForRepository(
+  activeAnalysisTasks: Map<
+    string,
+    { controller: AbortController; repositoryId: string; promise: Promise<void> }
+  >,
+  repositoryId: string,
+) {
+  const tasks = Array.from(activeAnalysisTasks.values()).filter(
+    (task) => task.repositoryId === repositoryId,
+  );
+
+  for (const task of tasks) {
+    task.controller.abort();
+  }
+
+  await Promise.all(tasks.map((task) => task.promise.catch(() => undefined)));
+}
+
+function throwIfTaskAborted(signal: AbortSignal) {
+  if (signal.aborted) {
+    throw new AnalysisAbortedError();
+  }
+}
+
+function isTaskAbortError(error: unknown) {
+  return error instanceof AnalysisAbortedError;
 }
 
 async function markAnalysisAsFailed(

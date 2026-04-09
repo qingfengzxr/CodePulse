@@ -13,6 +13,7 @@ export type AnalyzeRepositoryHistoryInput = {
   sampling: AnalysisSampling;
   detectedKinds: RepositoryKind[];
   startedAt: string;
+  abortSignal?: AbortSignal;
   onProgress?: (progress: AnalysisProgress) => void | Promise<void>;
   // Test-only hook for forcing analyzer outputs without touching the filesystem.
   __testOverrides?: Partial<

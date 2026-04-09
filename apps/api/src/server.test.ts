@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import type { AnalyzeRepositoryHistoryOutput } from "@code-dance/analyzer";
+import { AnalysisAbortedError, type AnalyzeRepositoryHistoryOutput } from "@code-dance/analyzer";
 
 import { createSqliteStorage } from "@code-dance/storage";
 
@@ -408,6 +408,89 @@ test("api allows different sampling analyses for the same repository", async () 
       },
     });
     assert.equal(duplicateWeeklyResponse.statusCode, 409);
+  } finally {
+    await app.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("api deletes repository with active analysis by aborting the task and cleaning data", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "code-dance-api-delete-active-test-"));
+  const storage = createSqliteStorage({ dbPath: join(dir, "api.sqlite") });
+  const repositoryPath = join(dir, "fixture");
+  await mkdir(repositoryPath);
+
+  let abortedAnalysisId: string | null = null;
+  const app = createServer({
+    storage,
+    probeLocalRepositoryImpl: async (localPath) => ({
+      name: "fixture",
+      localPath,
+      defaultBranch: "main",
+      detectedKinds: ["rust"],
+    }),
+    analyzeRepositoryHistoryImpl: async (input) =>
+      await new Promise<AnalyzeRepositoryHistoryOutput>((resolve, reject) => {
+        input.abortSignal?.addEventListener(
+          "abort",
+          () => {
+            abortedAnalysisId = input.analysisId;
+            reject(new AnalysisAbortedError());
+          },
+          { once: true },
+        );
+      }),
+  });
+
+  try {
+    const registerResponse = await app.inject({
+      method: "POST",
+      url: "/api/repositories",
+      payload: {
+        sourceType: "local-path",
+        localPath: repositoryPath,
+      },
+    });
+    assert.equal(registerResponse.statusCode, 201);
+    const repository = registerResponse.json();
+
+    const analysisResponse = await app.inject({
+      method: "POST",
+      url: "/api/analyses",
+      payload: {
+        repositoryId: repository.id,
+        sampling: "weekly",
+      },
+    });
+    assert.equal(analysisResponse.statusCode, 202);
+    const analysisId = analysisResponse.json().job.id;
+
+    const deleteResponse = await app.inject({
+      method: "DELETE",
+      url: `/api/repositories/${repository.id}`,
+    });
+    assert.equal(deleteResponse.statusCode, 204);
+    assert.equal(abortedAnalysisId, analysisId);
+
+    const repositoryListResponse = await app.inject({
+      method: "GET",
+      url: "/api/repositories",
+    });
+    assert.equal(repositoryListResponse.statusCode, 200);
+    assert.equal(repositoryListResponse.json().length, 0);
+
+    const analysisResponseAfterDelete = await app.inject({
+      method: "GET",
+      url: `/api/analyses/${analysisId}`,
+    });
+    assert.equal(analysisResponseAfterDelete.statusCode, 404);
+
+    const summariesResponse = await app.inject({
+      method: "GET",
+      url: "/api/analysis-summaries",
+    });
+    assert.equal(summariesResponse.statusCode, 200);
+    assert.equal(summariesResponse.json().length, 0);
   } finally {
     await app.close();
     await rm(dir, { recursive: true, force: true });

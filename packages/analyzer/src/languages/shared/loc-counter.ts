@@ -10,6 +10,7 @@ export type CountModuleLocAtRevisionInput = {
   revision: string;
   modules: ModuleWithFiles[];
   concurrency?: number;
+  abortSignal?: AbortSignal;
   onFileProcessed?: (context: {
     moduleKey: string;
     filePath: string;
@@ -23,6 +24,10 @@ export async function countModuleLocAtRevision(
   const locByModule = new Map<string, number>();
   const tasks = input.modules.flatMap((module) =>
     module.files.map((filePath) => async () => {
+      if (input.abortSignal?.aborted) {
+        return;
+      }
+
       const loc = await countFileLocAtRevision(input.localPath, input.revision, filePath);
 
       locByModule.set(module.key, (locByModule.get(module.key) ?? 0) + loc);

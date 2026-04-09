@@ -7,6 +7,7 @@ import {
 } from "@code-dance/git";
 import type { DiffStatRow } from "@code-dance/git";
 import { countModuleLocAtRevision } from "../shared/loc-counter.js";
+import { throwIfAborted } from "../shared/abort.js";
 import { estimateSnapshotEtaSeconds } from "../shared/progress-estimate.js";
 import type {
   AnalyzeRepositoryHistoryInput,
@@ -83,9 +84,11 @@ export async function analyzeRustHistory(
   const previousModuleKeys = new Set<string>();
 
   for (let snapshotIndex = 0; snapshotIndex < sampledCommits.length; snapshotIndex += 1) {
+    throwIfAborted(input.abortSignal);
     const commit = sampledCommits[snapshotIndex]!;
     const previousCommit = sampledCommits[snapshotIndex - 1] ?? null;
     const modules = await detectRustModulesAtRevision(input.localPath, commit.hash);
+    throwIfAborted(input.abortSignal);
     const currentModulesByKey = new Map(modules.map((module) => [module.key, module]));
     const locFiles = countDistinctModuleFiles(modules);
     const diffRows =
@@ -107,7 +110,9 @@ export async function analyzeRustHistory(
       localPath: input.localPath,
       revision: commit.hash,
       modules,
+      abortSignal: input.abortSignal,
       onFileProcessed: async ({ moduleKey }) => {
+        throwIfAborted(input.abortSignal);
         processedWorkUnits += 1;
         await publishSnapshotProgress({
           input,
@@ -133,6 +138,7 @@ export async function analyzeRustHistory(
       const resolver = createModuleAttributionResolver(modules);
 
       for (const diffRow of diffRows) {
+        throwIfAborted(input.abortSignal);
         const attributedModule = resolver(resolveDiffAttributionPath(diffRow));
 
         if (
@@ -351,5 +357,6 @@ async function publishSnapshotProgress(input: {
 }
 
 async function publishProgress(input: AnalyzeRustHistoryInput, progress: AnalysisProgress) {
+  throwIfAborted(input.abortSignal);
   await input.onProgress?.(progress);
 }

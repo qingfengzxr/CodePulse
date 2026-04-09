@@ -11,6 +11,7 @@ import type {
   AnalyzeRepositoryHistoryInput,
   AnalyzeRepositoryHistoryOutput,
 } from "../shared/types.js";
+import { throwIfAborted } from "../shared/abort.js";
 import { countModuleLocAtRevision } from "../shared/loc-counter.js";
 import { estimateSnapshotEtaSeconds } from "../shared/progress-estimate.js";
 
@@ -84,11 +85,13 @@ export async function analyzeNodeHistory(
   const previousModulesByKey = new Map<string, { name: string; kind: string }>();
 
   for (let snapshotIndex = 0; snapshotIndex < sampledCommits.length; snapshotIndex += 1) {
+    throwIfAborted(input.abortSignal);
     const commit = sampledCommits[snapshotIndex]!;
     const previousCommit = sampledCommits[snapshotIndex - 1] ?? null;
     const modules = (await detectNodeModulesAtRevision(input.localPath, commit.hash)).filter(
       (module) => module.files.length > 0,
     );
+    throwIfAborted(input.abortSignal);
     const currentModulesByKey = new Map(modules.map((module) => [module.key, module]));
     const locFiles = countDistinctModuleFiles(modules);
     const diffRows =
@@ -110,7 +113,9 @@ export async function analyzeNodeHistory(
       localPath: input.localPath,
       revision: commit.hash,
       modules,
+      abortSignal: input.abortSignal,
       onFileProcessed: async ({ moduleKey }) => {
+        throwIfAborted(input.abortSignal);
         processedWorkUnits += 1;
         await publishSnapshotProgress({
           input,
@@ -136,6 +141,7 @@ export async function analyzeNodeHistory(
       const resolver = createModuleAttributionResolver(modules);
 
       for (const diffRow of diffRows) {
+        throwIfAborted(input.abortSignal);
         const attributionPath = resolveDiffAttributionPath(diffRow);
         const attributedModule = resolver(attributionPath);
 
@@ -366,5 +372,6 @@ async function publishSnapshotProgress(input: {
 }
 
 async function publishProgress(input: AnalyzeNodeHistoryInput, progress: AnalysisProgress) {
+  throwIfAborted(input.abortSignal);
   await input.onProgress?.(progress);
 }

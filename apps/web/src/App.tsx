@@ -286,14 +286,14 @@ export function App() {
   const latestAnalysesByRepositoryAndSampling = Object.values(analysisSummaries).reduce<
     Record<string, AnalysisSummaryDto>
   >((accumulator, analysis) => {
-      const key = `${analysis.job.repositoryId}:${analysis.job.sampling}`;
-      const current = accumulator[key];
-      if (!current || current.job.createdAt < analysis.job.createdAt) {
-        accumulator[key] = analysis;
-      }
+    const key = `${analysis.job.repositoryId}:${analysis.job.sampling}`;
+    const current = accumulator[key];
+    if (!current || current.job.createdAt < analysis.job.createdAt) {
+      accumulator[key] = analysis;
+    }
 
-      return accumulator;
-    }, {});
+    return accumulator;
+  }, {});
 
   function updateRepositorySampling(repositoryId: string, sampling: AnalysisSamplingDto) {
     setSelectedSamplingByRepository((current) => ({
