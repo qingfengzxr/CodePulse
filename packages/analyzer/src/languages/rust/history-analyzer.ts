@@ -14,7 +14,13 @@ import {
 import type { DiffStatRow, GitCommit } from "@code-dance/git";
 import { countModuleLocAtRevision } from "../shared/loc-counter.js";
 import { throwIfAborted } from "../shared/abort.js";
-import { estimateSnapshotEtaSeconds } from "../shared/progress-estimate.js";
+import { runWithConcurrency } from "../shared/concurrency.js";
+import {
+  estimateConcurrentSnapshotEtaSeconds,
+  estimateSnapshotEtaSeconds,
+} from "../shared/progress-estimate.js";
+import { createProgressPublisher } from "../shared/progress-publisher.js";
+import { resolveAnalyzerPerformanceOptions } from "../shared/runtime-options.js";
 import type {
   AnalyzeRepositoryHistoryInput,
   AnalyzeRepositoryHistoryOutput,
@@ -31,8 +37,12 @@ export async function analyzeRustHistory(
   }
 
   const startedAtMs = Date.parse(input.startedAt);
+  const publish = createProgressPublisher(input);
+  const { fileReadConcurrency, snapshotConcurrency } = resolveAnalyzerPerformanceOptions(
+    input.performance,
+  );
 
-  await publishProgress(input, {
+  await publishProgress(publish, input, {
     phase: "validating",
     percent: 2,
     totalCommits: 0,
@@ -49,7 +59,7 @@ export async function analyzeRustHistory(
 
   const commits = await listCommits(input.localPath, input.branch);
 
-  await publishProgress(input, {
+  await publishProgress(publish, input, {
     phase: "scanning-history",
     percent: 8,
     totalCommits: commits.length,
@@ -71,7 +81,7 @@ export async function analyzeRustHistory(
     throw new Error("no commits found for analysis");
   }
 
-  await publishProgress(input, {
+  await publishProgress(publish, input, {
     phase: "sampling",
     percent: 10,
     totalCommits: commits.length,
@@ -86,169 +96,49 @@ export async function analyzeRustHistory(
     updatedAt: new Date().toISOString(),
   });
 
+  const progressState = createAggregateSnapshotProgressState(sampledCommits.length);
+  const rawResults: RustSnapshotResult[] = Array.from({ length: sampledCommits.length });
+
+  await runWithConcurrency(
+    sampledCommits.map((_, snapshotIndex) => async () => {
+      rawResults[snapshotIndex] = await analyzeRustSnapshot({
+        input,
+        publish,
+        startedAtMs,
+        totalCommits: commits.length,
+        sampledCommits,
+        commitBuckets,
+        snapshotIndex,
+        fileReadConcurrency,
+        progressState,
+      });
+    }),
+    snapshotConcurrency,
+  );
+
   const snapshots: Snapshot[] = [];
   const points: MetricPoint[] = [];
   const candles: ModuleCandlePoint[] = [];
   const previousModuleKeys = new Set<string>();
 
-  for (let snapshotIndex = 0; snapshotIndex < sampledCommits.length; snapshotIndex += 1) {
-    throwIfAborted(input.abortSignal);
-    const commit = sampledCommits[snapshotIndex]!;
-    const bucket = commitBuckets[snapshotIndex]!;
-    const previousCommit = sampledCommits[snapshotIndex - 1] ?? null;
-    const diffRows =
-      previousCommit === null
-        ? []
-        : await readNumstatBetweenRevisions(input.localPath, previousCommit.hash, commit.hash);
-
-    snapshots.push({
-      analysisId: input.analysisId,
-      commit: commit.hash,
-      ts: commit.committedAt,
-    });
-
-    let processedWorkUnits = 0;
-    let totalWorkUnits = diffRows.length;
-    const currentSnapshotStartedAtMs = Date.now();
-    const bucketStates: Array<{
-      commit: GitCommit;
-      locByModule: Map<string, number>;
-    }> = [];
-    const bucketModuleMetaByKey = new Map<string, { name: string; kind: string }>();
-    let modules: ModuleUnit[] = [];
-    let locByModule = new Map<string, number>();
-
-    for (const bucketCommit of bucket) {
-      throwIfAborted(input.abortSignal);
-      const bucketModules = await detectRustModulesAtRevision(input.localPath, bucketCommit.hash);
-      throwIfAborted(input.abortSignal);
-      totalWorkUnits += countDistinctModuleFiles(bucketModules);
-      const moduleNameByKey = new Map(bucketModules.map((module) => [module.key, module.name]));
-      const locAtCommit = await countModuleLocAtRevision({
-        localPath: input.localPath,
-        revision: bucketCommit.hash,
-        modules: bucketModules,
-        abortSignal: input.abortSignal,
-        onFileProcessed: async ({ moduleKey }) => {
-          throwIfAborted(input.abortSignal);
-          processedWorkUnits += 1;
-          await publishSnapshotProgress({
-            input,
-            totalCommits: commits.length,
-            sampledCommits: sampledCommits.length,
-            snapshotIndex,
-            currentCommit: commit.hash,
-            currentModule: moduleNameByKey.get(moduleKey) ?? null,
-            currentFiles: totalWorkUnits,
-            processedFiles: processedWorkUnits,
-            startedAtMs,
-            currentSnapshotStartedAtMs,
-          });
-        },
-      });
-
-      for (const module of bucketModules) {
-        bucketModuleMetaByKey.set(module.key, { name: module.name, kind: module.kind });
-      }
-
-      bucketStates.push({
-        commit: bucketCommit,
-        locByModule: locAtCommit,
-      });
-
-      if (bucketCommit.hash === commit.hash) {
-        modules = bucketModules;
-        locByModule = locAtCommit;
-      }
+  for (const result of rawResults) {
+    if (!result) {
+      continue;
     }
 
-    const currentModulesByKey = new Map(modules.map((module) => [module.key, module]));
-
-    const diffMetricsByModule = new Map<
-      string,
-      { added: number; deleted: number; churn: number }
-    >();
-
-    if (previousCommit !== null) {
-      const resolver = createModuleAttributionResolver(modules);
-
-      for (const diffRow of diffRows) {
-        throwIfAborted(input.abortSignal);
-        const attributedModule = resolver(resolveDiffAttributionPath(diffRow));
-
-        if (
-          attributedModule &&
-          !diffRow.isBinary &&
-          diffRow.added !== null &&
-          diffRow.deleted !== null
-        ) {
-          const currentMetric = diffMetricsByModule.get(attributedModule.key) ?? {
-            added: 0,
-            deleted: 0,
-            churn: 0,
-          };
-          currentMetric.added += diffRow.added;
-          currentMetric.deleted += diffRow.deleted;
-          currentMetric.churn += diffRow.added + diffRow.deleted;
-          diffMetricsByModule.set(attributedModule.key, currentMetric);
-        }
-
-        processedWorkUnits += 1;
-        await publishSnapshotProgress({
-          input,
-          totalCommits: commits.length,
-          sampledCommits: sampledCommits.length,
-          snapshotIndex,
-          currentCommit: commit.hash,
-          currentModule: attributedModule?.name ?? null,
-          currentFiles: totalWorkUnits,
-          processedFiles: processedWorkUnits,
-          startedAtMs,
-          currentSnapshotStartedAtMs,
-        });
-      }
-    }
-
-    for (const module of modules) {
-      const loc = locByModule.get(module.key) ?? 0;
-      const diffMetric =
-        previousCommit === null
-          ? { added: loc, deleted: 0, churn: loc }
-          : (diffMetricsByModule.get(module.key) ?? { added: 0, deleted: 0, churn: 0 });
-
-      points.push({
-        analysisId: input.analysisId,
-        ts: commit.committedAt,
-        commit: commit.hash,
-        moduleKey: module.key,
-        moduleName: module.name,
-        moduleKind: module.kind,
-        loc,
-        added: diffMetric.added,
-        deleted: diffMetric.deleted,
-        churn: diffMetric.churn,
-      });
-    }
-
-    candles.push(
-      ...buildObservedCandles({
-        analysisId: input.analysisId,
-        ts: commit.committedAt,
-        commit: commit.hash,
-        states: bucketStates,
-        moduleMetaByKey: bucketModuleMetaByKey,
-      }),
-    );
+    snapshots.push(result.snapshot);
+    points.push(...result.points);
+    candles.push(...result.candles);
 
     for (const moduleKey of previousModuleKeys) {
-      if (currentModulesByKey.has(moduleKey)) {
+      if (result.moduleMetaByKey.has(moduleKey)) {
         continue;
       }
 
       points.push({
         analysisId: input.analysisId,
-        ts: commit.committedAt,
-        commit: commit.hash,
+        ts: result.snapshot.ts,
+        commit: result.snapshot.commit,
         moduleKey,
         moduleName: moduleKey.replace("rust:crate:", ""),
         moduleKind: "rust-crate",
@@ -260,26 +150,12 @@ export async function analyzeRustHistory(
     }
 
     previousModuleKeys.clear();
-    for (const module of modules) {
-      previousModuleKeys.add(module.key);
+    for (const moduleKey of result.moduleMetaByKey.keys()) {
+      previousModuleKeys.add(moduleKey);
     }
-
-    await publishSnapshotProgress({
-      input,
-      totalCommits: commits.length,
-      sampledCommits: sampledCommits.length,
-      snapshotIndex,
-      currentCommit: commit.hash,
-      currentModule: null,
-      currentFiles: totalWorkUnits,
-      processedFiles: totalWorkUnits,
-      startedAtMs,
-      currentSnapshotStartedAtMs,
-      forceCompletedSnapshots: snapshotIndex + 1,
-    });
   }
 
-  await publishProgress(input, {
+  await publishProgress(publish, input, {
     phase: "persisting",
     percent: 98,
     totalCommits: commits.length,
@@ -317,6 +193,247 @@ export async function analyzeRustHistory(
 
 function countDistinctModuleFiles(modules: { files: string[] }[]): number {
   return new Set(modules.flatMap((module) => module.files)).size;
+}
+
+type RustSnapshotResult = {
+  snapshot: Snapshot;
+  points: MetricPoint[];
+  candles: ModuleCandlePoint[];
+  moduleMetaByKey: Map<string, { name: string; kind: string }>;
+};
+
+type AggregateSnapshotProgressState = {
+  snapshots: Array<{
+    totalWorkUnits: number;
+    processedWorkUnits: number;
+    currentCommit: string | null;
+    currentModule: string | null;
+    startedAtMs: number | null;
+    completed: boolean;
+  }>;
+};
+
+async function analyzeRustSnapshot(input: {
+  input: AnalyzeRustHistoryInput;
+  publish: ReturnType<typeof createProgressPublisher>;
+  startedAtMs: number;
+  totalCommits: number;
+  sampledCommits: GitCommit[];
+  commitBuckets: GitCommit[][];
+  snapshotIndex: number;
+  fileReadConcurrency: number;
+  progressState: AggregateSnapshotProgressState;
+}): Promise<RustSnapshotResult> {
+  throwIfAborted(input.input.abortSignal);
+  const commit = input.sampledCommits[input.snapshotIndex]!;
+  const bucket = input.commitBuckets[input.snapshotIndex]!;
+  const previousCommit = input.sampledCommits[input.snapshotIndex - 1] ?? null;
+  const diffRows =
+    previousCommit === null
+      ? []
+      : await readNumstatBetweenRevisions(input.input.localPath, previousCommit.hash, commit.hash);
+
+  const currentSnapshotStartedAtMs = Date.now();
+  const progressEntry = input.progressState.snapshots[input.snapshotIndex]!;
+  progressEntry.totalWorkUnits = diffRows.length;
+  progressEntry.processedWorkUnits = 0;
+  progressEntry.currentCommit = commit.hash;
+  progressEntry.currentModule = null;
+  progressEntry.startedAtMs = currentSnapshotStartedAtMs;
+  progressEntry.completed = false;
+
+  const snapshot: Snapshot = {
+    analysisId: input.input.analysisId,
+    commit: commit.hash,
+    ts: commit.committedAt,
+  };
+
+  const candleBoundaryCommits = getCandleBoundaryCommits(bucket, previousCommit, commit);
+  const bucketStates: Array<{ commit: GitCommit; locByModule: Map<string, number> }> = [];
+  const bucketModuleMetaByKey = new Map<string, { name: string; kind: string }>();
+  let modules: ModuleUnit[] = [];
+  let locByModule = new Map<string, number>();
+
+  for (const bucketCommit of candleBoundaryCommits) {
+    throwIfAborted(input.input.abortSignal);
+    const bucketModules = await detectRustModulesAtRevision(input.input.localPath, bucketCommit.hash);
+    throwIfAborted(input.input.abortSignal);
+    progressEntry.totalWorkUnits += countDistinctModuleFiles(bucketModules);
+    const moduleNameByKey = new Map(bucketModules.map((module) => [module.key, module.name]));
+    const locAtCommit = await countModuleLocAtRevision({
+      localPath: input.input.localPath,
+      revision: bucketCommit.hash,
+      modules: bucketModules,
+      concurrency: input.fileReadConcurrency,
+      abortSignal: input.input.abortSignal,
+      onFileProcessed: async ({ moduleKey }) => {
+        throwIfAborted(input.input.abortSignal);
+        progressEntry.processedWorkUnits += 1;
+        progressEntry.currentModule = moduleNameByKey.get(moduleKey) ?? null;
+        await publishSnapshotProgress({
+          publish: input.publish,
+          input: input.input,
+          totalCommits: input.totalCommits,
+          sampledCommits: input.sampledCommits.length,
+          snapshotIndex: input.snapshotIndex,
+          currentCommit: commit.hash,
+          currentModule: progressEntry.currentModule,
+          currentFiles: progressEntry.totalWorkUnits,
+          processedFiles: progressEntry.processedWorkUnits,
+          startedAtMs: input.startedAtMs,
+          currentSnapshotStartedAtMs,
+          progressState: input.progressState,
+        });
+      },
+    });
+
+    for (const module of bucketModules) {
+      bucketModuleMetaByKey.set(module.key, { name: module.name, kind: module.kind });
+    }
+
+    bucketStates.push({
+      commit: bucketCommit,
+      locByModule: locAtCommit,
+    });
+
+    if (bucketCommit.hash === commit.hash) {
+      modules = bucketModules;
+      locByModule = locAtCommit;
+    }
+  }
+
+  const diffMetricsByModule = new Map<string, { added: number; deleted: number; churn: number }>();
+
+  if (previousCommit !== null) {
+    const resolver = createModuleAttributionResolver(modules);
+
+    for (const diffRow of diffRows) {
+      throwIfAborted(input.input.abortSignal);
+      const attributedModule = resolver(resolveDiffAttributionPath(diffRow));
+
+      if (attributedModule && !diffRow.isBinary && diffRow.added !== null && diffRow.deleted !== null) {
+        const currentMetric = diffMetricsByModule.get(attributedModule.key) ?? {
+          added: 0,
+          deleted: 0,
+          churn: 0,
+        };
+        currentMetric.added += diffRow.added;
+        currentMetric.deleted += diffRow.deleted;
+        currentMetric.churn += diffRow.added + diffRow.deleted;
+        diffMetricsByModule.set(attributedModule.key, currentMetric);
+      }
+
+      progressEntry.processedWorkUnits += 1;
+      progressEntry.currentModule = attributedModule?.name ?? null;
+      await publishSnapshotProgress({
+        publish: input.publish,
+        input: input.input,
+        totalCommits: input.totalCommits,
+        sampledCommits: input.sampledCommits.length,
+        snapshotIndex: input.snapshotIndex,
+        currentCommit: commit.hash,
+        currentModule: progressEntry.currentModule,
+        currentFiles: progressEntry.totalWorkUnits,
+        processedFiles: progressEntry.processedWorkUnits,
+        startedAtMs: input.startedAtMs,
+        currentSnapshotStartedAtMs,
+        progressState: input.progressState,
+      });
+    }
+  }
+
+  const points = modules.map((module) => {
+    const loc = locByModule.get(module.key) ?? 0;
+    const diffMetric =
+      previousCommit === null
+        ? { added: loc, deleted: 0, churn: loc }
+        : (diffMetricsByModule.get(module.key) ?? { added: 0, deleted: 0, churn: 0 });
+
+    return {
+      analysisId: input.input.analysisId,
+      ts: commit.committedAt,
+      commit: commit.hash,
+      moduleKey: module.key,
+      moduleName: module.name,
+      moduleKind: module.kind,
+      loc,
+      added: diffMetric.added,
+      deleted: diffMetric.deleted,
+      churn: diffMetric.churn,
+    } satisfies MetricPoint;
+  });
+
+  progressEntry.processedWorkUnits = progressEntry.totalWorkUnits;
+  progressEntry.currentModule = null;
+  progressEntry.completed = true;
+  await publishSnapshotProgress({
+    publish: input.publish,
+    input: input.input,
+    totalCommits: input.totalCommits,
+    sampledCommits: input.sampledCommits.length,
+    snapshotIndex: input.snapshotIndex,
+    currentCommit: commit.hash,
+    currentModule: null,
+    currentFiles: progressEntry.totalWorkUnits,
+    processedFiles: progressEntry.totalWorkUnits,
+    startedAtMs: input.startedAtMs,
+    currentSnapshotStartedAtMs,
+    forceCompletedSnapshots: countCompletedSnapshots(input.progressState),
+    progressState: input.progressState,
+  });
+
+  return {
+    snapshot,
+    points,
+    candles: buildObservedCandles({
+      analysisId: input.input.analysisId,
+      ts: commit.committedAt,
+      commit: commit.hash,
+      states: bucketStates,
+      moduleMetaByKey: bucketModuleMetaByKey,
+    }),
+    moduleMetaByKey: new Map(modules.map((module) => [module.key, { name: module.name, kind: module.kind }])),
+  };
+}
+
+function createAggregateSnapshotProgressState(sampledCommits: number): AggregateSnapshotProgressState {
+  return {
+    snapshots: Array.from({ length: sampledCommits }, () => ({
+      totalWorkUnits: 0,
+      processedWorkUnits: 0,
+      currentCommit: null,
+      currentModule: null,
+      startedAtMs: null,
+      completed: false,
+    })),
+  };
+}
+
+function countCompletedSnapshots(progressState: AggregateSnapshotProgressState) {
+  return progressState.snapshots.filter((snapshot) => snapshot.completed).length;
+}
+
+function getCandleBoundaryCommits(
+  bucket: GitCommit[],
+  previousCommit: GitCommit | null,
+  fallbackCommit: GitCommit,
+): GitCommit[] {
+  const firstCommit = bucket[0] ?? fallbackCommit;
+  const lastCommit = bucket[bucket.length - 1] ?? fallbackCommit;
+
+  if (bucket.length <= 1 && previousCommit) {
+    if (previousCommit.hash === lastCommit.hash) {
+      return [lastCommit];
+    }
+
+    return [previousCommit, lastCommit];
+  }
+
+  if (firstCommit.hash === lastCommit.hash) {
+    return [lastCommit];
+  }
+
+  return [firstCommit, lastCommit];
 }
 
 function createModuleAttributionResolver(modules: ModuleUnit[]) {
@@ -409,6 +526,7 @@ function isWithinModuleRoot(filePath: string, rootPath: string): boolean {
 }
 
 async function publishSnapshotProgress(input: {
+  publish: ReturnType<typeof createProgressPublisher>;
   input: AnalyzeRustHistoryInput;
   totalCommits: number;
   sampledCommits: number;
@@ -420,24 +538,39 @@ async function publishSnapshotProgress(input: {
   startedAtMs: number;
   currentSnapshotStartedAtMs: number;
   forceCompletedSnapshots?: number;
+  progressState?: AggregateSnapshotProgressState;
 }) {
-  const completedSnapshots = input.forceCompletedSnapshots ?? input.snapshotIndex;
-  const snapshotFraction = input.currentFiles > 0 ? input.processedFiles / input.currentFiles : 1;
-  const totalFraction =
-    (input.snapshotIndex + snapshotFraction) / Math.max(input.sampledCommits, 1);
+  const completedSnapshots =
+    input.forceCompletedSnapshots ?? input.progressState?.snapshots.filter((snapshot) => snapshot.completed).length ?? input.snapshotIndex;
+  const totalFraction = input.progressState
+    ? input.progressState.snapshots.reduce((sum, snapshot) => {
+        if (snapshot.totalWorkUnits <= 0) {
+          return sum + (snapshot.completed ? 1 : 0);
+        }
+
+        return sum + Math.min(snapshot.processedWorkUnits / snapshot.totalWorkUnits, 1);
+      }, 0) / Math.max(input.sampledCommits, 1)
+    : (input.snapshotIndex + (input.currentFiles > 0 ? input.processedFiles / input.currentFiles : 1)) /
+      Math.max(input.sampledCommits, 1);
   const percent = 10 + totalFraction * 85;
 
-  const etaSeconds = estimateSnapshotEtaSeconds({
-    sampledCommits: input.sampledCommits,
-    snapshotIndex: input.snapshotIndex,
-    currentFiles: input.currentFiles,
-    processedFiles: input.processedFiles,
-    startedAtMs: input.startedAtMs,
-    currentSnapshotStartedAtMs: input.currentSnapshotStartedAtMs,
-    forceCompletedSnapshots: input.forceCompletedSnapshots,
-  });
+  const etaSeconds = input.progressState
+    ? estimateConcurrentSnapshotEtaSeconds({
+        sampledCommits: input.sampledCommits,
+        snapshots: input.progressState.snapshots,
+        startedAtMs: input.startedAtMs,
+      })
+    : estimateSnapshotEtaSeconds({
+        sampledCommits: input.sampledCommits,
+        snapshotIndex: input.snapshotIndex,
+        currentFiles: input.currentFiles,
+        processedFiles: input.processedFiles,
+        startedAtMs: input.startedAtMs,
+        currentSnapshotStartedAtMs: input.currentSnapshotStartedAtMs,
+        forceCompletedSnapshots: input.forceCompletedSnapshots,
+      });
 
-  await publishProgress(input.input, {
+  await publishProgress(input.publish, input.input, {
     phase: "analyzing-snapshots",
     percent: Math.min(95, Number(percent.toFixed(2))),
     totalCommits: input.totalCommits,
@@ -453,7 +586,11 @@ async function publishSnapshotProgress(input: {
   });
 }
 
-async function publishProgress(input: AnalyzeRustHistoryInput, progress: AnalysisProgress) {
+async function publishProgress(
+  publish: ReturnType<typeof createProgressPublisher>,
+  input: AnalyzeRustHistoryInput,
+  progress: AnalysisProgress,
+) {
   throwIfAborted(input.abortSignal);
-  await input.onProgress?.(progress);
+  await publish(progress);
 }

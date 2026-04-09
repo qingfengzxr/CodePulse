@@ -32,6 +32,38 @@ type CreateServerDeps = {
   analyzeRepositoryHistoryImpl?: typeof analyzeRepositoryHistory;
   detectRepositoryModulesImpl?: typeof detectRepositoryModules;
   probeLocalRepositoryImpl?: typeof probeLocalRepository;
+  analysisSchedulerConfig?: Partial<AnalysisSchedulerConfig>;
+  analysisPerformanceConfig?: Partial<AnalysisPerformanceConfig>;
+};
+
+type AnalysisSchedulerConfig = {
+  maxConcurrentAnalyses: number;
+  maxConcurrentAnalysesPerRepository: number;
+};
+
+type AnalysisPerformanceConfig = {
+  fileReadConcurrency: number;
+  analyzerConcurrency: number;
+  snapshotConcurrency: number;
+  progressThrottleMs: number;
+};
+
+const DEFAULT_ANALYSIS_PERFORMANCE_CONFIG: AnalysisPerformanceConfig = {
+  fileReadConcurrency: 8,
+  analyzerConcurrency: 1,
+  snapshotConcurrency: 2,
+  progressThrottleMs: 1000,
+};
+
+type AnalysisSchedulerTask = {
+  analysisId: string;
+  repositoryId: string;
+  controller: AbortController;
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (error: unknown) => void;
+  state: "queued" | "running";
+  input: Omit<Parameters<typeof runAnalysisTask>[0], "abortSignal">;
 };
 
 export function createServer(deps: CreateServerDeps = {}) {
@@ -40,10 +72,12 @@ export function createServer(deps: CreateServerDeps = {}) {
     deps.analyzeRepositoryHistoryImpl ?? analyzeRepositoryHistory;
   const detectRepositoryModulesImpl = deps.detectRepositoryModulesImpl ?? detectRepositoryModules;
   const probeLocalRepositoryImpl = deps.probeLocalRepositoryImpl ?? probeLocalRepository;
-  const activeAnalysisTasks = new Map<
-    string,
-    { controller: AbortController; repositoryId: string; promise: Promise<void> }
-  >();
+  const analysisPerformanceConfig = normalizeAnalysisPerformanceConfig(
+    deps.analysisPerformanceConfig ?? readAnalysisPerformanceConfigFromEnv(process.env),
+  );
+  const analysisScheduler = createAnalysisScheduler({
+    config: normalizeAnalysisSchedulerConfig(deps.analysisSchedulerConfig),
+  });
 
   const app = Fastify({
     logger: true,
@@ -56,19 +90,15 @@ export function createServer(deps: CreateServerDeps = {}) {
   app.addHook("onReady", async () => {
     await resumeInterruptedAnalyses({
       app,
-      activeAnalysisTasks,
+      analysisScheduler,
       storage,
       analyzeRepositoryHistoryImpl,
+      analysisPerformanceConfig,
     });
   });
 
   app.addHook("onClose", async () => {
-    await Promise.all(
-      Array.from(activeAnalysisTasks.values(), (task) => {
-        task.controller.abort();
-        return task.promise.catch(() => undefined);
-      }),
-    );
+    await analysisScheduler.close();
     storage.close();
   });
 
@@ -130,7 +160,7 @@ export function createServer(deps: CreateServerDeps = {}) {
       return sendApiError(reply, 404, "repository_not_found", "repository was not found");
     }
 
-    await cancelAnalysesForRepository(activeAnalysisTasks, params.id);
+    await analysisScheduler.cancelRepository(params.id);
 
     await storage.repositories.deleteById(params.id);
     return reply.code(204).send();
@@ -368,9 +398,10 @@ export function createServer(deps: CreateServerDeps = {}) {
     await storage.analysisJobs.create(initialRecord.job);
     await storage.analysisJobs.upsertProgress(analysisId, initialRecord.progress);
 
-    registerAnalysisTask(activeAnalysisTasks, {
+    analysisScheduler.schedule({
       storage,
       analyzeRepositoryHistoryImpl,
+      analysisPerformanceConfig,
       analysisId,
       repositoryId: repository.id,
       localPath: repository.localPath,
@@ -389,6 +420,7 @@ export function createServer(deps: CreateServerDeps = {}) {
 async function runAnalysisTask(input: {
   storage: SqliteStorage;
   analyzeRepositoryHistoryImpl: typeof analyzeRepositoryHistory;
+  analysisPerformanceConfig?: AnalysisPerformanceConfig;
   abortSignal: AbortSignal;
   analysisId: string;
   repositoryId: string;
@@ -427,6 +459,7 @@ async function runAnalysisTask(input: {
       detectedKinds: input.detectedKinds,
       startedAt: input.startedAt,
       abortSignal: input.abortSignal,
+      performance: input.analysisPerformanceConfig,
       onProgress: async (progress) => {
         throwIfTaskAborted(input.abortSignal);
         await input.storage.analysisJobs.updateJob(input.analysisId, (current) => ({
@@ -499,14 +532,206 @@ async function runAnalysisTask(input: {
   }
 }
 
+function createAnalysisScheduler(input: {
+  config: AnalysisSchedulerConfig;
+}) {
+  const tasksById = new Map<string, AnalysisSchedulerTask>();
+  const queuedTaskIds: string[] = [];
+  const activeByRepository = new Map<string, number>();
+  let activeCount = 0;
+  let closed = false;
+  let draining = false;
+  let drainRequested = false;
+
+  function schedule(taskInput: Omit<Parameters<typeof runAnalysisTask>[0], "abortSignal">) {
+    if (closed) {
+      return;
+    }
+
+    const controller = new AbortController();
+    let resolve!: () => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<void>((promiseResolve, promiseReject) => {
+      resolve = promiseResolve;
+      reject = promiseReject;
+    });
+
+    const task: AnalysisSchedulerTask = {
+      analysisId: taskInput.analysisId,
+      repositoryId: taskInput.repositoryId,
+      controller,
+      promise,
+      resolve,
+      reject,
+      state: "queued",
+      input: taskInput,
+    };
+
+    tasksById.set(task.analysisId, task);
+    queuedTaskIds.push(task.analysisId);
+    void drainQueue();
+  }
+
+  async function cancelRepository(repositoryId: string) {
+    const tasks = Array.from(tasksById.values()).filter(
+      (task) => task.repositoryId === repositoryId,
+    );
+
+    for (const task of tasks) {
+      task.controller.abort();
+      if (task.state === "queued") {
+        removeQueuedTask(task.analysisId);
+        settleTaskAsAborted(task);
+        tasksById.delete(task.analysisId);
+      }
+    }
+
+    await Promise.all(tasks.map((task) => task.promise.catch(() => undefined)));
+    void drainQueue();
+  }
+
+  async function close() {
+    if (closed) {
+      return;
+    }
+
+    closed = true;
+
+    const tasks = Array.from(tasksById.values());
+    for (const task of tasks) {
+      task.controller.abort();
+      if (task.state === "queued") {
+        removeQueuedTask(task.analysisId);
+        settleTaskAsAborted(task);
+        tasksById.delete(task.analysisId);
+      }
+    }
+
+    await Promise.all(tasks.map((task) => task.promise.catch(() => undefined)));
+  }
+
+  async function drainQueue() {
+    if (closed) {
+      return;
+    }
+
+    if (draining) {
+      drainRequested = true;
+      return;
+    }
+
+    draining = true;
+    try {
+      while (!closed) {
+        const nextTask = pickNextRunnableTask();
+        if (!nextTask) {
+          break;
+        }
+
+        startTask(nextTask);
+      }
+    } finally {
+      draining = false;
+      if (drainRequested) {
+        drainRequested = false;
+        void drainQueue();
+      }
+    }
+  }
+
+  function pickNextRunnableTask() {
+    for (let index = 0; index < queuedTaskIds.length; index += 1) {
+      const taskId = queuedTaskIds[index];
+      if (!taskId) {
+        continue;
+      }
+
+      const task = tasksById.get(taskId);
+      if (!task) {
+        queuedTaskIds.splice(index, 1);
+        index -= 1;
+        continue;
+      }
+
+      const repositoryActiveCount = activeByRepository.get(task.repositoryId) ?? 0;
+      if (activeCount >= input.config.maxConcurrentAnalyses) {
+        return null;
+      }
+      if (repositoryActiveCount >= input.config.maxConcurrentAnalysesPerRepository) {
+        continue;
+      }
+
+      queuedTaskIds.splice(index, 1);
+      return task;
+    }
+
+    return null;
+  }
+
+  function startTask(task: AnalysisSchedulerTask) {
+    if (closed) {
+      settleTaskAsAborted(task);
+      tasksById.delete(task.analysisId);
+      return;
+    }
+
+    task.state = "running";
+    activeCount += 1;
+    activeByRepository.set(task.repositoryId, (activeByRepository.get(task.repositoryId) ?? 0) + 1);
+
+    void runTask(task);
+  }
+
+  async function runTask(task: AnalysisSchedulerTask) {
+    try {
+      await runAnalysisTask({
+        ...task.input,
+        abortSignal: task.controller.signal,
+      });
+      task.resolve();
+    } catch (error) {
+      if (isTaskAbortError(error)) {
+        task.resolve();
+      } else {
+        task.reject(error);
+      }
+    } finally {
+      activeCount -= 1;
+      const repositoryActiveCount = (activeByRepository.get(task.repositoryId) ?? 1) - 1;
+      if (repositoryActiveCount > 0) {
+        activeByRepository.set(task.repositoryId, repositoryActiveCount);
+      } else {
+        activeByRepository.delete(task.repositoryId);
+      }
+      tasksById.delete(task.analysisId);
+      void drainQueue();
+    }
+  }
+
+  function removeQueuedTask(analysisId: string) {
+    const index = queuedTaskIds.indexOf(analysisId);
+    if (index >= 0) {
+      queuedTaskIds.splice(index, 1);
+    }
+  }
+
+  function settleTaskAsAborted(task: AnalysisSchedulerTask) {
+    task.reject(new AnalysisAbortedError());
+  }
+
+  return {
+    schedule,
+    cancelRepository,
+    close,
+  };
+}
+
 async function resumeInterruptedAnalyses(input: {
   app: FastifyInstance;
-  activeAnalysisTasks: Map<
-    string,
-    { controller: AbortController; repositoryId: string; promise: Promise<void> }
-  >;
+  analysisScheduler: ReturnType<typeof createAnalysisScheduler>;
   storage: SqliteStorage;
   analyzeRepositoryHistoryImpl: typeof analyzeRepositoryHistory;
+  analysisPerformanceConfig?: AnalysisPerformanceConfig;
 }) {
   const summaries = await input.storage.query.listAnalysisSummaries();
   const interrupted = summaries.filter(
@@ -549,9 +774,10 @@ async function resumeInterruptedAnalyses(input: {
       "resuming interrupted analysis after server restart",
     );
 
-    registerAnalysisTask(input.activeAnalysisTasks, {
+    input.analysisScheduler.schedule({
       storage: input.storage,
       analyzeRepositoryHistoryImpl: input.analyzeRepositoryHistoryImpl,
+      analysisPerformanceConfig: input.analysisPerformanceConfig,
       analysisId: summary.job.id,
       repositoryId: summary.job.repositoryId,
       localPath: repository.localPath,
@@ -561,46 +787,6 @@ async function resumeInterruptedAnalyses(input: {
       startedAt: summary.progress.startedAt,
     });
   }
-}
-
-function registerAnalysisTask(
-  activeAnalysisTasks: Map<
-    string,
-    { controller: AbortController; repositoryId: string; promise: Promise<void> }
-  >,
-  input: Omit<Parameters<typeof runAnalysisTask>[0], "abortSignal">,
-) {
-  const controller = new AbortController();
-  const promise = runAnalysisTask({
-    ...input,
-    abortSignal: controller.signal,
-  }).finally(() => {
-    activeAnalysisTasks.delete(input.analysisId);
-  });
-
-  activeAnalysisTasks.set(input.analysisId, {
-    controller,
-    repositoryId: input.repositoryId,
-    promise,
-  });
-}
-
-async function cancelAnalysesForRepository(
-  activeAnalysisTasks: Map<
-    string,
-    { controller: AbortController; repositoryId: string; promise: Promise<void> }
-  >,
-  repositoryId: string,
-) {
-  const tasks = Array.from(activeAnalysisTasks.values()).filter(
-    (task) => task.repositoryId === repositoryId,
-  );
-
-  for (const task of tasks) {
-    task.controller.abort();
-  }
-
-  await Promise.all(tasks.map((task) => task.promise.catch(() => undefined)));
 }
 
 function throwIfTaskAborted(signal: AbortSignal) {
@@ -642,6 +828,90 @@ async function markAnalysisAsFailed(
     startedAt,
     updatedAt: finishedAt,
   });
+}
+
+function normalizeAnalysisSchedulerConfig(
+  config: Partial<AnalysisSchedulerConfig> | undefined,
+): AnalysisSchedulerConfig {
+  const maxConcurrentAnalyses = normalizePositiveInteger(config?.maxConcurrentAnalyses, 2);
+  const maxConcurrentAnalysesPerRepository = Math.min(
+    normalizePositiveInteger(config?.maxConcurrentAnalysesPerRepository, 1),
+    maxConcurrentAnalyses,
+  );
+
+  return {
+    maxConcurrentAnalyses,
+    maxConcurrentAnalysesPerRepository,
+  };
+}
+
+function readAnalysisPerformanceConfigFromEnv(
+  env: NodeJS.ProcessEnv,
+): Partial<AnalysisPerformanceConfig> | undefined {
+  const config = {
+    fileReadConcurrency: readIntegerEnv(env.CODE_DANCE_ANALYZER_FILE_READ_CONCURRENCY),
+    analyzerConcurrency: readIntegerEnv(env.CODE_DANCE_ANALYZER_CONCURRENCY),
+    snapshotConcurrency: readIntegerEnv(env.CODE_DANCE_ANALYZER_SNAPSHOT_CONCURRENCY),
+    progressThrottleMs: readIntegerEnv(env.CODE_DANCE_ANALYZER_PROGRESS_THROTTLE_MS),
+  };
+
+  return Object.values(config).some((value) => value !== undefined) ? config : undefined;
+}
+
+function normalizeAnalysisPerformanceConfig(
+  config: Partial<AnalysisPerformanceConfig> | undefined,
+): AnalysisPerformanceConfig {
+  return {
+    fileReadConcurrency: normalizePositiveInteger(
+      config?.fileReadConcurrency,
+      DEFAULT_ANALYSIS_PERFORMANCE_CONFIG.fileReadConcurrency,
+    ),
+    analyzerConcurrency: normalizePositiveInteger(
+      config?.analyzerConcurrency,
+      DEFAULT_ANALYSIS_PERFORMANCE_CONFIG.analyzerConcurrency,
+    ),
+    snapshotConcurrency: normalizePositiveInteger(
+      config?.snapshotConcurrency,
+      DEFAULT_ANALYSIS_PERFORMANCE_CONFIG.snapshotConcurrency,
+    ),
+    progressThrottleMs: normalizeNonNegativeInteger(
+      config?.progressThrottleMs,
+      DEFAULT_ANALYSIS_PERFORMANCE_CONFIG.progressThrottleMs,
+    ),
+  };
+}
+
+function normalizePositiveInteger(value: number | undefined, fallback: number) {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.max(1, Math.floor(value));
+}
+
+function normalizeNonNegativeInteger(value: number | undefined, fallback: number) {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.max(0, Math.floor(value));
+}
+
+function readIntegerEnv(value: string | undefined) {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function sendApiError(

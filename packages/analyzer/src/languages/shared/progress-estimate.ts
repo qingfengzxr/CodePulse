@@ -9,6 +9,19 @@ type EstimateEtaInput = {
   forceCompletedSnapshots?: number;
 };
 
+type AggregateSnapshotProgressEntry = {
+  totalWorkUnits: number;
+  processedWorkUnits: number;
+  completed: boolean;
+};
+
+type EstimateConcurrentEtaInput = {
+  sampledCommits: number;
+  snapshots: AggregateSnapshotProgressEntry[];
+  startedAtMs: number;
+  nowMs?: number;
+};
+
 export function estimateSnapshotEtaSeconds(input: EstimateEtaInput) {
   const nowMs = input.nowMs ?? Date.now();
   const elapsedSeconds = Math.max((nowMs - input.startedAtMs) / 1000, 0.001);
@@ -46,4 +59,31 @@ export function estimateSnapshotEtaSeconds(input: EstimateEtaInput) {
   }
 
   return (currentSnapshotEtaSeconds ?? 0) + (futureSnapshotsEtaSeconds ?? 0);
+}
+
+export function estimateConcurrentSnapshotEtaSeconds(input: EstimateConcurrentEtaInput) {
+  const nowMs = input.nowMs ?? Date.now();
+  const elapsedSeconds = Math.max((nowMs - input.startedAtMs) / 1000, 0.001);
+  const completedFraction =
+    input.snapshots.reduce((sum, snapshot) => {
+      if (snapshot.completed) {
+        return sum + 1;
+      }
+
+      if (snapshot.totalWorkUnits <= 0) {
+        return sum;
+      }
+
+      return sum + Math.min(snapshot.processedWorkUnits / snapshot.totalWorkUnits, 1);
+    }, 0) / Math.max(input.sampledCommits, 1);
+
+  if (completedFraction <= 0) {
+    return null;
+  }
+
+  if (completedFraction >= 1) {
+    return 0;
+  }
+
+  return Math.max(Math.ceil((elapsedSeconds * (1 - completedFraction)) / completedFraction), 0);
 }

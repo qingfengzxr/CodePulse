@@ -1,4 +1,4 @@
-import { readTextFileAtRevision } from "@code-dance/git";
+import { createRevisionTextFileReader, readTextFileAtRevision } from "@code-dance/git";
 
 type ModuleWithFiles = {
   key: string;
@@ -22,35 +22,48 @@ export async function countModuleLocAtRevision(
   input: CountModuleLocAtRevisionInput,
 ): Promise<Map<string, number>> {
   const locByModule = new Map<string, number>();
-  const tasks = input.modules.flatMap((module) =>
-    module.files.map((filePath) => async () => {
-      if (input.abortSignal?.aborted) {
-        return;
-      }
+  const reader = createRevisionTextFileReader(input.localPath, input.revision);
 
-      const loc = await countFileLocAtRevision(input.localPath, input.revision, filePath);
+  try {
+    const tasks = input.modules.flatMap((module) =>
+      module.files.map((filePath) => async () => {
+        if (input.abortSignal?.aborted) {
+          return;
+        }
 
-      locByModule.set(module.key, (locByModule.get(module.key) ?? 0) + loc);
+        const loc = await countFileLocAtRevision(input.localPath, input.revision, filePath, {
+          readTextFile: reader.readTextFile,
+        });
 
-      await input.onFileProcessed?.({
-        moduleKey: module.key,
-        filePath,
-        loc,
-      });
-    }),
-  );
+        locByModule.set(module.key, (locByModule.get(module.key) ?? 0) + loc);
 
-  await runWithConcurrency(tasks, normalizeConcurrency(input.concurrency));
+        await input.onFileProcessed?.({
+          moduleKey: module.key,
+          filePath,
+          loc,
+        });
+      }),
+    );
 
-  return locByModule;
+    await runWithConcurrency(tasks, normalizeConcurrency(input.concurrency));
+
+    return locByModule;
+  } finally {
+    await reader.close();
+  }
 }
 
 async function countFileLocAtRevision(
   localPath: string,
   revision: string,
   filePath: string,
+  options: {
+    readTextFile?: (filePath: string) => Promise<string | null>;
+  } = {},
 ): Promise<number> {
-  const content = await readTextFileAtRevision(localPath, revision, filePath);
+  const content = options.readTextFile
+    ? await options.readTextFile(filePath)
+    : await readTextFileAtRevision(localPath, revision, filePath);
   if (content === null || isBinaryText(content)) {
     return 0;
   }

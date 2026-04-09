@@ -6,6 +6,7 @@ import type {
   RepositoryKind,
   Snapshot,
 } from "@code-dance/domain";
+import type { AnalyzerPerformanceOptions } from "./runtime-options.js";
 
 export type AnalyzeRepositoryHistoryInput = {
   analysisId: string;
@@ -16,6 +17,7 @@ export type AnalyzeRepositoryHistoryInput = {
   startedAt: string;
   abortSignal?: AbortSignal;
   onProgress?: (progress: AnalysisProgress) => void | Promise<void>;
+  performance?: AnalyzerPerformanceOptions;
   // Test-only hook for forcing analyzer outputs without touching the filesystem.
   __testOverrides?: Partial<
     Record<

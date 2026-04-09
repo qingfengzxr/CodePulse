@@ -5,6 +5,8 @@ import type {
   AnalyzeRepositoryHistoryOutput,
 } from "./languages/shared/types.js";
 import type { MetricPoint, ModuleCandlePoint, Snapshot } from "@code-dance/domain";
+import { runWithConcurrency } from "./languages/shared/concurrency.js";
+import { resolveAnalyzerPerformanceOptions } from "./languages/shared/runtime-options.js";
 
 export type {
   AnalyzeRepositoryHistoryInput,
@@ -40,13 +42,18 @@ export async function analyzeRepositoryHistory(
   }
 
   const results: Array<{ name: string; output: AnalyzeRepositoryHistoryOutput }> = [];
+  const { analyzerConcurrency } = resolveAnalyzerPerformanceOptions(input.performance);
 
-  for (const analyzer of analyzers) {
-    results.push({
-      name: analyzer.name,
-      output: await analyzer.run(input),
-    });
-  }
+  await runWithConcurrency(
+    analyzers.map((analyzer) => async () => {
+      const output = await analyzer.run(input);
+      results.push({
+        name: analyzer.name,
+        output,
+      });
+    }),
+    analyzerConcurrency,
+  );
 
   return mergeAnalyzerResults(results);
 }

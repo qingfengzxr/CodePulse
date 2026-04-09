@@ -70,12 +70,18 @@ export function ModuleCandlestickChart({ candles }: ModuleCandlestickChartProps)
     }
 
     const compact = container.clientWidth < 720;
-    const candleData = selectedModule.candles.map((candle) => [
-      candle.open,
-      candle.close,
-      candle.low,
-      candle.high,
-    ] as const);
+    const candleData = selectedModule.candles.map((candle) => ({
+      value: [candle.open, candle.close, candle.low, candle.high] as [
+        number,
+        number,
+        number,
+        number,
+      ],
+      open: candle.open,
+      close: candle.close,
+      low: candle.low,
+      high: candle.high,
+    }));
     chart.setOption(
       {
         backgroundColor: "transparent",
@@ -87,10 +93,19 @@ export function ModuleCandlestickChart({ candles }: ModuleCandlestickChartProps)
             const params = (Array.isArray(paramsRaw) ? paramsRaw[0] : paramsRaw) as
               | {
                   axisValueLabel?: string;
-                  data?: [number, number, number, number];
+                  dataIndex?: number;
                 }
               | undefined;
-            const candle = params?.data ?? [0, 0, 0, 0];
+            const rawCandle =
+              typeof params?.dataIndex === "number"
+                ? selectedModule.candles[params.dataIndex]
+                : undefined;
+            const candle: [number, number, number, number] = [
+              rawCandle?.open ?? 0,
+              rawCandle?.close ?? 0,
+              rawCandle?.low ?? 0,
+              rawCandle?.high ?? 0,
+            ];
 
             return [
               `<strong>${escapeHtml(String(params?.axisValueLabel ?? "").slice(0, 10))}</strong>`,
@@ -144,6 +159,7 @@ export function ModuleCandlestickChart({ candles }: ModuleCandlestickChartProps)
         series: [
           {
             type: "candlestick",
+            dimensions: ["open", "close", "low", "high"],
             data: candleData,
             itemStyle: {
               color: "#22c55e",

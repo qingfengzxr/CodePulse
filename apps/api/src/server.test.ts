@@ -10,6 +10,12 @@ import { createSqliteStorage } from "@code-dance/storage";
 
 import { createServer } from "./server.js";
 
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+};
+
 function createAnalysisOutput(analysisId: string): AnalyzeRepositoryHistoryOutput {
   return {
     snapshots: [
@@ -92,6 +98,14 @@ function createAnalysisOutput(analysisId: string): AnalyzeRepositoryHistoryOutpu
         churn: 4,
       },
     ],
+  };
+}
+
+function createEmptyAnalysisOutput(_analysisId: string): AnalyzeRepositoryHistoryOutput {
+  return {
+    snapshots: [],
+    points: [],
+    candles: [],
   };
 }
 
@@ -205,7 +219,7 @@ function createMixedAnalysisOutput(analysisId: string): AnalyzeRepositoryHistory
 }
 
 async function waitFor<T>(fn: () => Promise<T>, predicate: (value: T) => boolean) {
-  for (let attempt = 0; attempt < 30; attempt += 1) {
+  for (let attempt = 0; attempt < 300; attempt += 1) {
     const value = await fn();
     if (predicate(value)) {
       return value;
@@ -213,6 +227,21 @@ async function waitFor<T>(fn: () => Promise<T>, predicate: (value: T) => boolean
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   throw new Error("condition not met in time");
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+
+  return {
+    promise,
+    resolve,
+    reject,
+  } satisfies Deferred<T>;
 }
 
 test("api persists analyses and serves query endpoints from sqlite", async () => {
@@ -381,6 +410,126 @@ test("api persists analyses and serves query endpoints from sqlite", async () =>
       },
     });
     assert.equal(reRegisterResponse.statusCode, 201);
+  } finally {
+    await app.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("api queues analyses from the same repository until the active one finishes", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "code-dance-api-queue-test-"));
+  const storage = createSqliteStorage({ dbPath: join(dir, "api.sqlite") });
+  const repositoryPath = join(dir, "fixture");
+  await mkdir(repositoryPath);
+
+  const startedAnalysisIds: string[] = [];
+  const gates = new Map<string, Deferred<AnalyzeRepositoryHistoryOutput>>();
+  const app = createServer({
+    storage,
+    probeLocalRepositoryImpl: async (localPath) => ({
+      name: "fixture",
+      localPath,
+      defaultBranch: "main",
+      detectedKinds: ["rust"],
+    }),
+    analysisSchedulerConfig: {
+      maxConcurrentAnalyses: 2,
+      maxConcurrentAnalysesPerRepository: 1,
+    },
+    analyzeRepositoryHistoryImpl: async (input) => {
+      startedAnalysisIds.push(input.analysisId);
+      const gate =
+        gates.get(input.analysisId) ??
+        (() => {
+          const created = createDeferred<AnalyzeRepositoryHistoryOutput>();
+          gates.set(input.analysisId, created);
+          return created;
+        })();
+      return gate.promise;
+    },
+  });
+
+  try {
+    const registerResponse = await app.inject({
+      method: "POST",
+      url: "/api/repositories",
+      payload: {
+        sourceType: "local-path",
+        localPath: repositoryPath,
+      },
+    });
+    assert.equal(registerResponse.statusCode, 201);
+    const repository = registerResponse.json();
+
+    const firstResponse = await app.inject({
+      method: "POST",
+      url: "/api/analyses",
+      payload: {
+        repositoryId: repository.id,
+        sampling: "weekly",
+      },
+    });
+    assert.equal(firstResponse.statusCode, 202);
+    const first = firstResponse.json();
+    const firstGate = gates.get(first.job.id) ?? createDeferred<AnalyzeRepositoryHistoryOutput>();
+    gates.set(first.job.id, firstGate);
+
+    const secondResponse = await app.inject({
+      method: "POST",
+      url: "/api/analyses",
+      payload: {
+        repositoryId: repository.id,
+        sampling: "daily",
+      },
+    });
+    assert.equal(secondResponse.statusCode, 202);
+    const second = secondResponse.json();
+    const secondGate =
+      gates.get(second.job.id) ?? createDeferred<AnalyzeRepositoryHistoryOutput>();
+    gates.set(second.job.id, secondGate);
+
+    await waitFor(
+      async () =>
+        app.inject({
+          method: "GET",
+          url: `/api/analyses/${second.job.id}`,
+        }),
+      (response) => response.json().job.status === "pending",
+    );
+    assert.deepEqual(startedAnalysisIds, [first.job.id]);
+
+    firstGate.resolve(createEmptyAnalysisOutput(first.job.id));
+
+    await waitFor(
+      async () =>
+        app.inject({
+          method: "GET",
+          url: `/api/analyses/${first.job.id}`,
+        }),
+      (response) => response.json().job.status === "done",
+    );
+
+    await waitFor(
+      async () =>
+        app.inject({
+          method: "GET",
+          url: `/api/analyses/${second.job.id}`,
+        }),
+      (response) => response.json().job.status === "running",
+    );
+    assert.deepEqual(startedAnalysisIds, [first.job.id, second.job.id]);
+
+    secondGate.resolve(createEmptyAnalysisOutput(second.job.id));
+
+    const finishedSecond = await waitFor(
+      async () =>
+        app.inject({
+          method: "GET",
+          url: `/api/analyses/${second.job.id}`,
+        }),
+      (response) => response.json().job.status === "done",
+    );
+    assert.equal(finishedSecond.statusCode, 200);
   } finally {
     await app.close();
     await rm(dir, { recursive: true, force: true });
@@ -711,6 +860,79 @@ test("api exposes mixed rust and node analysis results in one job", async () => 
   }
 });
 
+test("api passes static analyzer performance config into analysis tasks", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "code-dance-api-performance-test-"));
+  const storage = createSqliteStorage({ dbPath: join(dir, "api.sqlite") });
+  const repositoryPath = join(dir, "fixture");
+  await mkdir(repositoryPath);
+
+  let receivedPerformance:
+    | {
+        fileReadConcurrency?: number;
+        analyzerConcurrency?: number;
+        snapshotConcurrency?: number;
+        progressThrottleMs?: number;
+      }
+    | undefined;
+
+  const app = createServer({
+    storage,
+    analysisPerformanceConfig: {
+      fileReadConcurrency: 9,
+      analyzerConcurrency: 2,
+      snapshotConcurrency: 3,
+      progressThrottleMs: 750,
+    },
+    probeLocalRepositoryImpl: async (localPath) => ({
+      name: "fixture",
+      localPath,
+      defaultBranch: "main",
+      detectedKinds: ["rust"],
+    }),
+    analyzeRepositoryHistoryImpl: async (input) => {
+      receivedPerformance = input.performance;
+      return createAnalysisOutput(input.analysisId);
+    },
+  });
+
+  try {
+    const registerResponse = await app.inject({
+      method: "POST",
+      url: "/api/repositories",
+      payload: {
+        sourceType: "local-path",
+        localPath: repositoryPath,
+      },
+    });
+    assert.equal(registerResponse.statusCode, 201);
+    const repository = registerResponse.json();
+
+    const analysisResponse = await app.inject({
+      method: "POST",
+      url: "/api/analyses",
+      payload: {
+        repositoryId: repository.id,
+        sampling: "weekly",
+      },
+    });
+    assert.equal(analysisResponse.statusCode, 202);
+
+    await waitFor(
+      async () => receivedPerformance,
+      (performance) => performance !== undefined,
+    );
+    assert.deepEqual(receivedPerformance, {
+      fileReadConcurrency: 9,
+      analyzerConcurrency: 2,
+      snapshotConcurrency: 3,
+      progressThrottleMs: 750,
+    });
+  } finally {
+    await app.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("api resumes interrupted analyses on server startup", async () => {
   const dir = await mkdtemp(join(tmpdir(), "code-dance-api-resume-test-"));
   const dbPath = join(dir, "api.sqlite");
@@ -759,10 +981,25 @@ test("api resumes interrupted analyses on server startup", async () => {
   }
 
   let resumedRuns = 0;
+  let resumedPerformance:
+    | {
+        fileReadConcurrency?: number;
+        analyzerConcurrency?: number;
+        snapshotConcurrency?: number;
+        progressThrottleMs?: number;
+      }
+    | undefined;
   const app = createServer({
     storage: createSqliteStorage({ dbPath }),
+    analysisPerformanceConfig: {
+      fileReadConcurrency: 5,
+      analyzerConcurrency: 2,
+      snapshotConcurrency: 4,
+      progressThrottleMs: 600,
+    },
     analyzeRepositoryHistoryImpl: async (input) => {
       resumedRuns += 1;
+      resumedPerformance = input.performance;
       await input.onProgress?.({
         phase: "analyzing-snapshots",
         percent: 90,
@@ -784,6 +1021,12 @@ test("api resumes interrupted analyses on server startup", async () => {
   try {
     await app.ready();
     assert.equal(resumedRuns, 1);
+    assert.deepEqual(resumedPerformance, {
+      fileReadConcurrency: 5,
+      analyzerConcurrency: 2,
+      snapshotConcurrency: 4,
+      progressThrottleMs: 600,
+    });
 
     const resumed = await waitFor(
       async () =>
@@ -797,6 +1040,175 @@ test("api resumes interrupted analyses on server startup", async () => {
     assert.equal(resumed.statusCode, 200);
     assert.equal(resumed.json().snapshots.length, 2);
     assert.equal(resumed.json().job.status, "done");
+  } finally {
+    await app.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("api respects the global analysis concurrency limit during interrupted recovery", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "code-dance-api-recovery-limit-test-"));
+  const dbPath = join(dir, "api.sqlite");
+  const seededStorage = createSqliteStorage({ dbPath });
+  const repoOnePath = join(dir, "fixture-one");
+  const repoTwoPath = join(dir, "fixture-two");
+  await mkdir(repoOnePath);
+  await mkdir(repoTwoPath);
+
+  try {
+    await seededStorage.repositories.create({
+      id: "repo-one",
+      name: "fixture-one",
+      sourceType: "local-path",
+      localPath: repoOnePath,
+      remoteUrl: null,
+      defaultBranch: "main",
+      detectedKinds: ["rust"],
+      status: "ready",
+      createdAt: "2026-04-09T10:00:00.000Z",
+    });
+    await seededStorage.repositories.create({
+      id: "repo-two",
+      name: "fixture-two",
+      sourceType: "local-path",
+      localPath: repoTwoPath,
+      remoteUrl: null,
+      defaultBranch: "main",
+      detectedKinds: ["rust"],
+      status: "ready",
+      createdAt: "2026-04-09T10:01:00.000Z",
+    });
+    await seededStorage.analysisJobs.create({
+      id: "analysis-one",
+      repositoryId: "repo-one",
+      branch: "main",
+      sampling: "weekly",
+      status: "running",
+      createdAt: "2026-04-09T10:05:00.000Z",
+      finishedAt: null,
+      errorMessage: null,
+    });
+    await seededStorage.analysisJobs.upsertProgress("analysis-one", {
+      phase: "analyzing-snapshots",
+      percent: 45,
+      totalCommits: 200,
+      sampledCommits: 90,
+      completedSnapshots: 40,
+      currentCommit: "aaa111",
+      currentModule: "core",
+      currentFiles: 10,
+      processedFiles: 4,
+      etaSeconds: 12,
+      startedAt: "2026-04-09T10:05:00.000Z",
+      updatedAt: "2026-04-09T10:10:00.000Z",
+    });
+    await seededStorage.analysisJobs.create({
+      id: "analysis-two",
+      repositoryId: "repo-two",
+      branch: "main",
+      sampling: "weekly",
+      status: "pending",
+      createdAt: "2026-04-09T10:06:00.000Z",
+      finishedAt: null,
+      errorMessage: null,
+    });
+    await seededStorage.analysisJobs.upsertProgress("analysis-two", {
+      phase: "pending",
+      percent: 0,
+      totalCommits: 0,
+      sampledCommits: 0,
+      completedSnapshots: 0,
+      currentCommit: null,
+      currentModule: null,
+      currentFiles: null,
+      processedFiles: null,
+      etaSeconds: null,
+      startedAt: "2026-04-09T10:06:00.000Z",
+      updatedAt: "2026-04-09T10:06:00.000Z",
+    });
+  } finally {
+    seededStorage.close();
+  }
+
+  const startedAnalysisIds: string[] = [];
+  const gates = new Map<string, Deferred<AnalyzeRepositoryHistoryOutput>>();
+  const app = createServer({
+    storage: createSqliteStorage({ dbPath }),
+    analysisSchedulerConfig: {
+      maxConcurrentAnalyses: 1,
+      maxConcurrentAnalysesPerRepository: 1,
+    },
+    analyzeRepositoryHistoryImpl: async (input) => {
+      startedAnalysisIds.push(input.analysisId);
+      const gate =
+        gates.get(input.analysisId) ??
+        (() => {
+          const created = createDeferred<AnalyzeRepositoryHistoryOutput>();
+          gates.set(input.analysisId, created);
+          return created;
+        })();
+      return gate.promise;
+    },
+  });
+
+  try {
+    gates.set("analysis-one", createDeferred<AnalyzeRepositoryHistoryOutput>());
+    gates.set("analysis-two", createDeferred<AnalyzeRepositoryHistoryOutput>());
+
+    await app.ready();
+
+    await waitFor(
+      async () => startedAnalysisIds,
+      (ids) => ids.length === 1,
+    );
+    const firstStartedId = startedAnalysisIds[0]!;
+    const secondStartedId = firstStartedId === "analysis-one" ? "analysis-two" : "analysis-one";
+
+    await waitFor(
+      async () =>
+        app.inject({
+          method: "GET",
+          url: `/api/analyses/${firstStartedId}`,
+        }),
+      (response) => response.json().job.status === "running",
+    );
+    gates.get(firstStartedId)!.resolve(createEmptyAnalysisOutput(firstStartedId));
+
+    await waitFor(
+      async () =>
+        app.inject({
+          method: "GET",
+          url: `/api/analyses/${firstStartedId}`,
+        }),
+      (response) => response.json().job.status === "done",
+    );
+
+    await waitFor(
+      async () => startedAnalysisIds,
+      (ids) => ids.length === 2,
+    );
+    assert.deepEqual(startedAnalysisIds, [firstStartedId, secondStartedId]);
+
+    await waitFor(
+      async () =>
+        app.inject({
+          method: "GET",
+          url: `/api/analyses/${secondStartedId}`,
+        }),
+      (response) => response.json().job.status === "running",
+    );
+
+    gates.get(secondStartedId)!.resolve(createEmptyAnalysisOutput(secondStartedId));
+
+    const finishedSecond = await waitFor(
+      async () =>
+        app.inject({
+          method: "GET",
+          url: `/api/analyses/${secondStartedId}`,
+        }),
+      (response) => response.json().job.status === "done",
+    );
+    assert.equal(finishedSecond.statusCode, 200);
   } finally {
     await app.close();
     await rm(dir, { recursive: true, force: true });

@@ -1,7 +1,7 @@
 import { access, readdir, readFile, stat } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { basename, join, posix, relative } from "node:path";
-import { execFile } from "node:child_process";
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createRequire } from "node:module";
 import { promisify } from "node:util";
 
@@ -10,6 +10,12 @@ import type { AnalysisSampling, ModuleUnit, RepositoryKind } from "@code-dance/d
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const toml = require("toml") as { parse(input: string): unknown };
+const inflightTextFileAtRevisionReads = new Map<string, Promise<string | null>>();
+
+export type RevisionTextFileReader = {
+  readTextFile(filePath: string): Promise<string | null>;
+  close(): Promise<void>;
+};
 
 export type LocalRepositoryProbe = {
   name: string;
@@ -202,20 +208,204 @@ export async function readTextFileAtRevision(
   revision: string,
   filePath: string,
 ): Promise<string | null> {
-  try {
-    const { stdout } = await execFileAsync(
-      "git",
-      ["-C", localPath, "show", `${revision}:${filePath}`],
-      {
-        encoding: "utf8",
-        maxBuffer: 8 * 1024 * 1024,
-      },
-    );
-
-    return typeof stdout === "string" ? stdout : String(stdout);
-  } catch {
-    return null;
+  const cacheKey = createTextFileAtRevisionCacheKey(localPath, revision, filePath);
+  const cached = inflightTextFileAtRevisionReads.get(cacheKey);
+  if (cached) {
+    return cached;
   }
+
+  const readPromise = (async () => {
+    try {
+      const { stdout } = await execFileAsync(
+        "git",
+        ["-C", localPath, "show", `${revision}:${filePath}`],
+        {
+          encoding: "utf8",
+          maxBuffer: 8 * 1024 * 1024,
+        },
+      );
+
+      return typeof stdout === "string" ? stdout : String(stdout);
+    } catch {
+      return null;
+    } finally {
+      inflightTextFileAtRevisionReads.delete(cacheKey);
+    }
+  })();
+
+  inflightTextFileAtRevisionReads.set(cacheKey, readPromise);
+  return readPromise;
+}
+
+export function createRevisionTextFileReader(
+  localPath: string,
+  revision: string,
+): RevisionTextFileReader {
+  return createBatchRevisionTextFileReader(localPath, revision);
+}
+
+function createBatchRevisionTextFileReader(
+  localPath: string,
+  revision: string,
+): RevisionTextFileReader {
+  const child = spawn("git", ["-C", localPath, "cat-file", "--batch"], {
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  let stdoutBuffer = Buffer.alloc(0);
+  let closed = false;
+  let closePromise: Promise<void> | null = null;
+  let drainError: Error | null = null;
+  const pending: BatchReadRequest[] = [];
+
+  child.stdout.on("data", (chunk: Buffer | string) => {
+    stdoutBuffer = Buffer.concat([
+      stdoutBuffer,
+      Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk),
+    ]);
+    drainPendingResponses();
+  });
+
+  child.stderr.on("data", (chunk: Buffer | string) => {
+    const message = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
+    if (message.trim().length > 0 && drainError === null) {
+      drainError = new Error(`git cat-file failed: ${message.trim()}`);
+    }
+  });
+
+  child.on("error", (error) => {
+    drainError = error instanceof Error ? error : new Error(String(error));
+    rejectPending(error);
+  });
+
+  child.on("close", (code) => {
+    closed = true;
+    if (code !== 0 && drainError === null) {
+      drainError = new Error(`git cat-file exited with code ${code ?? "unknown"}`);
+    }
+    if (pending.length > 0) {
+      rejectPending(drainError ?? new Error("git cat-file closed before all reads completed"));
+    }
+  });
+
+  return {
+    async readTextFile(filePath) {
+      if (closed) {
+        throw drainError ?? new Error("git cat-file reader is closed");
+      }
+
+      const cacheKey = createTextFileAtRevisionCacheKey(localPath, revision, filePath);
+      const cached = inflightTextFileAtRevisionReads.get(cacheKey);
+      if (cached) {
+        return cached;
+      }
+
+      const promise = new Promise<string | null>((resolve, reject) => {
+        pending.push({
+          resolve: (value) => {
+            inflightTextFileAtRevisionReads.delete(cacheKey);
+            resolve(value);
+          },
+          reject: (reason) => {
+            inflightTextFileAtRevisionReads.delete(cacheKey);
+            reject(reason);
+          },
+        });
+        child.stdin.write(`${revision}:${filePath}\n`);
+      });
+
+      inflightTextFileAtRevisionReads.set(cacheKey, promise);
+      return promise;
+    },
+    async close() {
+      if (closePromise !== null) {
+        return closePromise;
+      }
+
+      closePromise = closeBatchReader(child, () => {
+        closed = true;
+      });
+      return closePromise;
+    },
+  };
+
+  function drainPendingResponses() {
+    while (pending.length > 0) {
+      const current = pending[0];
+      if (!current) {
+        return;
+      }
+
+      const headerEnd = stdoutBuffer.indexOf(0x0a);
+      if (headerEnd < 0) {
+        return;
+      }
+
+      const header = stdoutBuffer.subarray(0, headerEnd).toString("utf8");
+      if (header.endsWith(" missing")) {
+        stdoutBuffer = stdoutBuffer.subarray(headerEnd + 1);
+        pending.shift();
+        current.resolve(null);
+        continue;
+      }
+
+      const headerParts = header.split(" ");
+      const sizeRaw = headerParts[2];
+      const size = sizeRaw ? Number.parseInt(sizeRaw, 10) : Number.NaN;
+      if (!Number.isFinite(size) || size < 0) {
+        rejectPending(new Error(`unexpected git cat-file header: ${header}`));
+        return;
+      }
+
+      const totalLength = headerEnd + 1 + size + 1;
+      if (stdoutBuffer.length < totalLength) {
+        return;
+      }
+
+      const contentBuffer = stdoutBuffer.subarray(headerEnd + 1, headerEnd + 1 + size);
+      stdoutBuffer = stdoutBuffer.subarray(totalLength);
+      pending.shift();
+      current.resolve(contentBuffer.toString("utf8"));
+    }
+  }
+
+  function rejectPending(error: unknown) {
+    const reason = error instanceof Error ? error : new Error(String(error));
+    while (pending.length > 0) {
+      pending.shift()?.reject(reason);
+    }
+  }
+}
+
+async function closeBatchReader(
+  child: ChildProcessWithoutNullStreams,
+  onClosed: () => void,
+): Promise<void> {
+  if (child.killed) {
+    onClosed();
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    child.once("close", () => {
+      onClosed();
+      resolve();
+    });
+    child.stdin.end();
+  });
+}
+
+type BatchReadRequest = {
+  resolve: (value: string | null) => void;
+  reject: (reason?: unknown) => void;
+};
+
+function createTextFileAtRevisionCacheKey(
+  localPath: string,
+  revision: string,
+  filePath: string,
+): string {
+  return [localPath, revision, filePath].join("\u0000");
 }
 
 export async function listFilesAtRevision(localPath: string, revision: string): Promise<string[]> {
@@ -255,7 +445,12 @@ export async function detectRustModulesAtRevision(
   localPath: string,
   revision: string,
 ): Promise<ModuleUnit[]> {
-  return detectRustModulesFromReader(createGitRevisionReader(localPath, revision));
+  const reader = createGitRevisionReader(localPath, revision);
+  try {
+    return await detectRustModulesFromReader(reader);
+  } finally {
+    await reader.close();
+  }
 }
 
 export async function detectNodeModules(localPath: string): Promise<ModuleUnit[]> {
@@ -266,7 +461,12 @@ export async function detectNodeModulesAtRevision(
   localPath: string,
   revision: string,
 ): Promise<ModuleUnit[]> {
-  return detectNodeModulesFromReader(createGitRevisionReader(localPath, revision));
+  const reader = createGitRevisionReader(localPath, revision);
+  try {
+    return await detectNodeModulesFromReader(reader);
+  } finally {
+    await reader.close();
+  }
 }
 
 type CargoPackageTable = {
@@ -765,20 +965,25 @@ function normalizeOptionalPath(value: string | undefined): string | null {
 type RepositorySnapshotReader = {
   readTextFile(filePath: string): Promise<string | null>;
   listFiles(): Promise<string[]>;
+  close(): Promise<void>;
 };
 
 function createGitRevisionReader(localPath: string, revision: string): RepositorySnapshotReader {
+  const textFileReader = createRevisionTextFileReader(localPath, revision);
   let cachedFilesPromise: Promise<string[]> | null = null;
 
   return {
     async readTextFile(filePath) {
-      return readTextFileAtRevision(localPath, revision, filePath);
+      return textFileReader.readTextFile(filePath);
     },
     async listFiles() {
       if (cachedFilesPromise === null) {
         cachedFilesPromise = listFilesAtRevision(localPath, revision);
       }
       return cachedFilesPromise;
+    },
+    async close() {
+      await textFileReader.close();
     },
   };
 }
@@ -799,6 +1004,9 @@ function createLocalSnapshotReader(localPath: string): RepositorySnapshotReader 
         cachedFilesPromise = collectLocalRepositoryFiles(localPath);
       }
       return cachedFilesPromise;
+    },
+    async close() {
+      return;
     },
   };
 }

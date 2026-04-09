@@ -270,6 +270,349 @@ test("mixed rust and node repository aggregates analyzer outputs into one result
   }
 });
 
+test("snapshot concurrency preserves analysis output", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "code-dance-analyzer-snapshot-concurrency-test-"));
+  const repoPath = join(dir, "mixed-repo");
+
+  try {
+    await mkdir(join(repoPath, "crates/core/src"), { recursive: true });
+    await mkdir(join(repoPath, "apps/web/src"), { recursive: true });
+
+    await writeFile(
+      join(repoPath, "Cargo.toml"),
+      ["[workspace]", 'members = ["crates/*"]', ""].join("\n"),
+    );
+    await writeFile(
+      join(repoPath, "crates/core/Cargo.toml"),
+      ["[package]", 'name = "core"', 'version = "0.1.0"', 'edition = "2021"', ""].join("\n"),
+    );
+    await writeFile(
+      join(repoPath, "crates/core/src/lib.rs"),
+      ["pub fn value() -> i32 {", "    1", "}", ""].join("\n"),
+    );
+    await writeFile(
+      join(repoPath, "package.json"),
+      JSON.stringify(
+        {
+          name: "mixed-repo",
+          private: true,
+          workspaces: ["apps/*"],
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFile(
+      join(repoPath, "apps/web/package.json"),
+      JSON.stringify({ name: "web" }, null, 2),
+    );
+    await writeFile(
+      join(repoPath, "apps/web/src/app.tsx"),
+      ["export function App() {", "  return <main>Hello</main>;", "}", ""].join("\n"),
+    );
+
+    await git(repoPath, ["init"]);
+    await git(repoPath, ["config", "user.name", "Codex"]);
+    await git(repoPath, ["config", "user.email", "codex@example.com"]);
+    await git(repoPath, ["add", "."]);
+    await git(repoPath, ["commit", "-m", "initial mixed"], "2026-04-01T00:00:00Z");
+
+    await writeFile(
+      join(repoPath, "crates/core/src/lib.rs"),
+      ["pub fn value() -> i32 {", "    2", "}", ""].join("\n"),
+    );
+    await writeFile(
+      join(repoPath, "apps/web/src/app.tsx"),
+      ["export function App() {", "  return <main>Hello mixed</main>;", "}", ""].join("\n"),
+    );
+    await git(repoPath, ["add", "."]);
+    await git(repoPath, ["commit", "-m", "update mixed"], "2026-04-08T00:00:00Z");
+
+    await writeFile(
+      join(repoPath, "crates/core/src/lib.rs"),
+      ["pub fn value() -> i32 {", "    3", "}", ""].join("\n"),
+    );
+    await writeFile(
+      join(repoPath, "apps/web/src/index.html"),
+      ["<main>", '  <div id="app"></div>', "</main>", ""].join("\n"),
+    );
+    await git(repoPath, ["add", "."]);
+    await git(repoPath, ["commit", "-m", "expand mixed"], "2026-04-15T00:00:00Z");
+
+    const serial = await analyzeRepositoryHistory({
+      analysisId: "analysis-serial-1",
+      localPath: repoPath,
+      branch: "HEAD",
+      sampling: "weekly",
+      detectedKinds: ["rust", "node"],
+      startedAt: "2026-04-16T00:00:00.000Z",
+      performance: {
+        snapshotConcurrency: 1,
+      },
+    });
+
+    const parallel = await analyzeRepositoryHistory({
+      analysisId: "analysis-parallel-2",
+      localPath: repoPath,
+      branch: "HEAD",
+      sampling: "weekly",
+      detectedKinds: ["rust", "node"],
+      startedAt: "2026-04-16T00:00:00.000Z",
+      performance: {
+        snapshotConcurrency: 2,
+      },
+    });
+
+    assert.deepEqual(
+      serial.snapshots.map((snapshot) => ({
+        commit: snapshot.commit,
+        ts: snapshot.ts,
+      })),
+      parallel.snapshots.map((snapshot) => ({
+        commit: snapshot.commit,
+        ts: snapshot.ts,
+      })),
+    );
+    assert.deepEqual(
+      serial.points.map((point) => ({
+        ts: point.ts,
+        commit: point.commit,
+        moduleKey: point.moduleKey,
+        loc: point.loc,
+        added: point.added,
+        deleted: point.deleted,
+        churn: point.churn,
+      })),
+      parallel.points.map((point) => ({
+        ts: point.ts,
+        commit: point.commit,
+        moduleKey: point.moduleKey,
+        loc: point.loc,
+        added: point.added,
+        deleted: point.deleted,
+        churn: point.churn,
+      })),
+    );
+    assert.deepEqual(
+      serial.candles.map((candle) => ({
+        ts: candle.ts,
+        commit: candle.commit,
+        moduleKey: candle.moduleKey,
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
+      })),
+      parallel.candles.map((candle) => ({
+        ts: candle.ts,
+        commit: candle.commit,
+        moduleKey: candle.moduleKey,
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
+      })),
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("weekly sampling derives candle OHLC from bucket boundaries", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "code-dance-analyzer-weekly-fast-test-"));
+  const repoPath = join(dir, "mixed-repo");
+
+  try {
+    await mkdir(join(repoPath, "crates/core/src"), { recursive: true });
+    await mkdir(join(repoPath, "apps/web/src"), { recursive: true });
+
+    await writeFile(
+      join(repoPath, "Cargo.toml"),
+      ["[workspace]", 'members = ["crates/*"]', ""].join("\n"),
+    );
+    await writeFile(
+      join(repoPath, "crates/core/Cargo.toml"),
+      ["[package]", 'name = "core"', 'version = "0.1.0"', 'edition = "2021"', ""].join("\n"),
+    );
+    await writeFile(
+      join(repoPath, "crates/core/src/lib.rs"),
+      ["pub fn core() -> i32 {", "    1", "}", ""].join("\n"),
+    );
+    await writeFile(
+      join(repoPath, "package.json"),
+      JSON.stringify(
+        {
+          name: "mixed-repo",
+          private: true,
+          workspaces: ["apps/*"],
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFile(
+      join(repoPath, "apps/web/package.json"),
+      JSON.stringify({ name: "web" }, null, 2),
+    );
+    await writeFile(
+      join(repoPath, "apps/web/src/app.tsx"),
+      ["export function App() {", "  return <main>one</main>;", "}", ""].join("\n"),
+    );
+
+    await git(repoPath, ["init"]);
+    await git(repoPath, ["config", "user.name", "Codex"]);
+    await git(repoPath, ["config", "user.email", "codex@example.com"]);
+    await git(repoPath, ["add", "."]);
+    await git(repoPath, ["commit", "-m", "initial mixed"], "2026-04-06T00:00:00Z");
+
+    await mkdir(join(repoPath, "crates/temp/src"), { recursive: true });
+    await mkdir(join(repoPath, "apps/temp/src"), { recursive: true });
+    await writeFile(
+      join(repoPath, "crates/core/src/lib.rs"),
+      ["pub fn core() -> i32 {", "    10", "}", ""].join("\n"),
+    );
+    await writeFile(
+      join(repoPath, "crates/temp/Cargo.toml"),
+      ["[package]", 'name = "temp"', 'version = "0.1.0"', 'edition = "2021"', ""].join("\n"),
+    );
+    await writeFile(
+      join(repoPath, "crates/temp/src/lib.rs"),
+      ["pub fn temp() -> i32 {", "    99", "}", ""].join("\n"),
+    );
+    await writeFile(
+      join(repoPath, "apps/web/src/app.tsx"),
+      ["export function App() {", "  return <main>two</main>;", "}", ""].join("\n"),
+    );
+    await writeFile(
+      join(repoPath, "apps/temp/package.json"),
+      JSON.stringify({ name: "temp" }, null, 2),
+    );
+    await writeFile(
+      join(repoPath, "apps/temp/src/temp.ts"),
+      ["export const temp = 99;", ""].join("\n"),
+    );
+    await git(repoPath, ["add", "."]);
+    await git(repoPath, ["commit", "-m", "temporary spike"], "2026-04-08T00:00:00Z");
+
+    await rm(join(repoPath, "crates/temp"), { recursive: true, force: true });
+    await rm(join(repoPath, "apps/temp"), { recursive: true, force: true });
+    await writeFile(
+      join(repoPath, "crates/core/src/lib.rs"),
+      ["pub fn core() -> i32 {", "    2", "}", ""].join("\n"),
+    );
+    await writeFile(
+      join(repoPath, "apps/web/src/app.tsx"),
+      ["export function App() {", "  return <main>three</main>;", "}", ""].join("\n"),
+    );
+    await git(repoPath, ["add", "."]);
+    await git(repoPath, ["commit", "-m", "final weekly snapshot"], "2026-04-10T00:00:00Z");
+
+    const weekly = await analyzeRepositoryHistory({
+      analysisId: "analysis-weekly-fast-1",
+      localPath: repoPath,
+      branch: "HEAD",
+      sampling: "weekly",
+      detectedKinds: ["rust", "node"],
+      startedAt: "2026-04-11T00:00:00.000Z",
+    });
+
+    assert.equal(weekly.snapshots.length, 1);
+    assert.deepEqual(
+      weekly.points.map((point) => point.moduleKey).sort(),
+      ["node:package:web", "rust:crate:core"],
+    );
+
+    const rustCoreCandle = weekly.candles.find((candle) => candle.moduleKey === "rust:crate:core");
+    const nodeWebCandle = weekly.candles.find((candle) => candle.moduleKey === "node:package:web");
+    const rustTempCandle = weekly.candles.find((candle) => candle.moduleKey === "rust:crate:temp");
+    const nodeTempCandle = weekly.candles.find((candle) => candle.moduleKey === "node:package:temp");
+
+    assert.ok(rustCoreCandle);
+    assert.ok(nodeWebCandle);
+    assert.equal(rustTempCandle, undefined);
+    assert.equal(nodeTempCandle, undefined);
+
+    const perCommit = await analyzeRepositoryHistory({
+      analysisId: "analysis-per-commit-fast-1",
+      localPath: repoPath,
+      branch: "HEAD",
+      sampling: "per-commit",
+      detectedKinds: ["rust", "node"],
+      startedAt: "2026-04-11T00:00:00.000Z",
+    });
+
+    assert.equal(perCommit.snapshots.length, 3);
+    assert.ok(perCommit.points.some((point) => point.moduleKey === "node:package:temp"));
+    assert.ok(perCommit.points.some((point) => point.moduleKey === "rust:crate:temp"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("per-commit sampling derives candle OHLC from previous and current commit", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "code-dance-analyzer-per-commit-candle-test-"));
+  const repoPath = join(dir, "rust-repo");
+
+  try {
+    await mkdir(join(repoPath, "crates/core/src"), { recursive: true });
+    await writeFile(
+      join(repoPath, "Cargo.toml"),
+      ["[workspace]", 'members = ["crates/*"]', ""].join("\n"),
+    );
+    await writeFile(
+      join(repoPath, "crates/core/Cargo.toml"),
+      ["[package]", 'name = "core"', 'version = "0.1.0"', 'edition = "2021"', ""].join("\n"),
+    );
+    await writeFile(
+      join(repoPath, "crates/core/src/lib.rs"),
+      ["pub fn value() -> i32 {", "    1", "}", ""].join("\n"),
+    );
+
+    await git(repoPath, ["init"]);
+    await git(repoPath, ["config", "user.name", "Codex"]);
+    await git(repoPath, ["config", "user.email", "codex@example.com"]);
+    await git(repoPath, ["add", "."]);
+    await git(repoPath, ["commit", "-m", "initial"], "2026-04-01T00:00:00Z");
+
+    await writeFile(
+      join(repoPath, "crates/core/src/lib.rs"),
+      [
+        "pub fn value() -> i32 {",
+        "    let first = 22;",
+        "    let second = first + 1;",
+        "    second",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    await git(repoPath, ["add", "."]);
+    await git(repoPath, ["commit", "-m", "expand"], "2026-04-02T00:00:00Z");
+
+    const result = await analyzeRepositoryHistory({
+      analysisId: "analysis-per-commit-candle-1",
+      localPath: repoPath,
+      branch: "HEAD",
+      sampling: "per-commit",
+      detectedKinds: ["rust"],
+      startedAt: "2026-04-03T00:00:00.000Z",
+    });
+
+    assert.equal(result.snapshots.length, 2);
+    const firstCandle = result.candles.find((candle) => candle.ts === "2026-04-01T00:00:00+00:00");
+    const secondCandle = result.candles.find((candle) => candle.ts === "2026-04-02T00:00:00+00:00");
+
+    assert.ok(firstCandle);
+    assert.equal(firstCandle.open, firstCandle.close);
+
+    assert.ok(secondCandle);
+    assert.ok(secondCandle.open < secondCandle.close);
+    assert.equal(secondCandle.high, secondCandle.close);
+    assert.equal(secondCandle.low, secondCandle.open);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("aggregate analyzer fails when snapshot timelines do not match", async () => {
   const baseline: AnalyzeRepositoryHistoryOutput = {
     snapshots: [
@@ -305,6 +648,46 @@ test("aggregate analyzer fails when snapshot timelines do not match", async () =
       }),
     /snapshot timeline mismatch/i,
   );
+});
+
+test("aggregate analyzer can run language analyzers concurrently", async () => {
+  const events: string[] = [];
+  let rustStarted = false;
+  let nodeStarted = false;
+
+  const baseline: AnalyzeRepositoryHistoryOutput = {
+    snapshots: [{ analysisId: "a1", commit: "aaa111", ts: "2026-04-01T00:00:00.000Z" }],
+    points: [],
+    candles: [],
+  };
+
+  await analyzeRepositoryHistory({
+    analysisId: "analysis-parallel-1",
+    localPath: "/tmp/unused",
+    branch: "HEAD",
+    sampling: "weekly",
+    detectedKinds: ["rust", "node"],
+    startedAt: "2026-04-09T00:00:00.000Z",
+    performance: {
+      analyzerConcurrency: 2,
+    },
+    __testOverrides: {
+      rust: async () => {
+        rustStarted = true;
+        events.push(`rust:${nodeStarted ? "overlap" : "solo"}`);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        return baseline;
+      },
+      node: async () => {
+        nodeStarted = true;
+        events.push(`node:${rustStarted ? "overlap" : "solo"}`);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        return baseline;
+      },
+    },
+  });
+
+  assert.ok(events.includes("rust:overlap") || events.includes("node:overlap"));
 });
 
 async function git(cwd: string, args: string[], authorDate?: string) {
