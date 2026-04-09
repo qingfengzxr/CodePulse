@@ -23,11 +23,7 @@ export async function countModuleLocAtRevision(
   const locByModule = new Map<string, number>();
   const tasks = input.modules.flatMap((module) =>
     module.files.map((filePath) => async () => {
-      const loc = await countFileLocAtRevision(
-        input.localPath,
-        input.revision,
-        filePath,
-      );
+      const loc = await countFileLocAtRevision(input.localPath, input.revision, filePath);
 
       locByModule.set(module.key, (locByModule.get(module.key) ?? 0) + loc);
 
@@ -54,9 +50,7 @@ async function countFileLocAtRevision(
     return 0;
   }
 
-  return content
-    .split(/\r?\n/)
-    .filter((line) => line.trim().length > 0).length;
+  return content.split(/\r?\n/).filter((line) => line.trim().length > 0).length;
 }
 
 function isBinaryText(content: string): boolean {
@@ -75,25 +69,25 @@ function normalizeConcurrency(value: number | undefined): number {
   return Math.max(1, Math.floor(value));
 }
 
-async function runWithConcurrency(
-  tasks: Array<() => Promise<void>>,
-  concurrency: number,
-) {
+async function runWithConcurrency(tasks: Array<() => Promise<void>>, concurrency: number) {
   if (tasks.length === 0) {
     return;
   }
 
   let nextIndex = 0;
 
-  const workers = Array.from({
-    length: Math.min(concurrency, tasks.length),
-  }, async () => {
-    while (nextIndex < tasks.length) {
-      const taskIndex = nextIndex;
-      nextIndex += 1;
-      await tasks[taskIndex]?.();
-    }
-  });
+  const workers = Array.from(
+    {
+      length: Math.min(concurrency, tasks.length),
+    },
+    async () => {
+      while (nextIndex < tasks.length) {
+        const taskIndex = nextIndex;
+        nextIndex += 1;
+        await tasks[taskIndex]?.();
+      }
+    },
+  );
 
   await Promise.all(workers);
 }

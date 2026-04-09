@@ -16,12 +16,7 @@ export type RepositoryTarget = {
   createdAt: string;
 };
 
-export type AnalysisSampling =
-  | "daily"
-  | "weekly"
-  | "monthly"
-  | "tag-based"
-  | "per-commit";
+export type AnalysisSampling = "daily" | "weekly" | "monthly" | "tag-based" | "per-commit";
 
 export type AnalysisJobStatus = "pending" | "running" | "done" | "failed";
 

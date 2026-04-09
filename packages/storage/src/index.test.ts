@@ -4,7 +4,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import type { AnalysisJob, AnalysisProgress, MetricPoint, RepositoryTarget, Snapshot } from "@code-dance/domain";
+import type {
+  AnalysisJob,
+  AnalysisProgress,
+  MetricPoint,
+  RepositoryTarget,
+  Snapshot,
+} from "@code-dance/domain";
 
 import { createSqliteStorage } from "./index.js";
 

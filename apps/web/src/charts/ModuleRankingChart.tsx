@@ -73,9 +73,7 @@ export function ModuleRankingChart({ analysisId }: ModuleRankingChartProps) {
         }
       } catch (requestError) {
         if (!cancelled) {
-          setError(
-            requestError instanceof Error ? requestError.message : "failed to load ranking",
-          );
+          setError(requestError instanceof Error ? requestError.message : "failed to load ranking");
         }
       }
     }
@@ -107,9 +105,9 @@ export function ModuleRankingChart({ analysisId }: ModuleRankingChartProps) {
             type: "shadow",
           },
           formatter: (paramsRaw: unknown) => {
-            const params = (Array.isArray(paramsRaw)
-              ? paramsRaw[0]
-              : paramsRaw) as { name?: string; value?: number } | undefined;
+            const params = (Array.isArray(paramsRaw) ? paramsRaw[0] : paramsRaw) as
+              | { name?: string; value?: number }
+              | undefined;
 
             return [
               `<strong>${params?.name ?? "-"}</strong>`,
@@ -160,7 +158,9 @@ export function ModuleRankingChart({ analysisId }: ModuleRankingChartProps) {
       <div className="chart-toolbar chart-toolbar-stacked">
         <div>
           <h3>当前时间点模块排行</h3>
-          <p className="chart-subtitle">横向条形图适合回答“谁最大、谁最活跃”，这里直接读取 ranking 查询接口。</p>
+          <p className="chart-subtitle">
+            横向条形图适合回答“谁最大、谁最活跃”，这里直接读取 ranking 查询接口。
+          </p>
         </div>
         <div className="chart-toolbar-inline">
           <div className="metric-switch">

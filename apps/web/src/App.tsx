@@ -24,19 +24,15 @@ export function App() {
   const location = useLocation();
   const [localPath, setLocalPath] = useState("");
   const [repositories, setRepositories] = useState<RepositoryTargetDto[]>([]);
-  const [moduleResults, setModuleResults] = useState<
-    Record<string, ModuleUnitDto[] | undefined>
-  >({});
+  const [moduleResults, setModuleResults] = useState<Record<string, ModuleUnitDto[] | undefined>>(
+    {},
+  );
   const [moduleLoading, setModuleLoading] = useState<Record<string, boolean>>({});
-  const [analysisSummaries, setAnalysisSummaries] = useState<
-    Record<string, AnalysisSummaryDto>
-  >({});
-  const [analysisDetails, setAnalysisDetails] = useState<Record<string, AnalysisResultDto>>(
+  const [analysisSummaries, setAnalysisSummaries] = useState<Record<string, AnalysisSummaryDto>>(
     {},
   );
-  const [analysisLoading, setAnalysisLoading] = useState<Record<string, boolean>>(
-    {},
-  );
+  const [analysisDetails, setAnalysisDetails] = useState<Record<string, AnalysisResultDto>>({});
+  const [analysisLoading, setAnalysisLoading] = useState<Record<string, boolean>>({});
   const [selectedSampling, setSelectedSampling] = useState<AnalysisSamplingDto>("weekly");
   const [deleteLoading, setDeleteLoading] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
@@ -49,8 +45,7 @@ export function App() {
 
   useEffect(() => {
     const activeAnalyses = Object.values(analysisSummaries).filter(
-      (analysis) =>
-        analysis.job.status === "pending" || analysis.job.status === "running",
+      (analysis) => analysis.job.status === "pending" || analysis.job.status === "running",
     );
 
     if (activeAnalyses.length === 0) {
@@ -81,28 +76,18 @@ export function App() {
       }
 
       if (!analysisSummaryResponse.ok) {
-        throw new Error(
-          `failed to load analysis summaries: ${analysisSummaryResponse.status}`,
-        );
+        throw new Error(`failed to load analysis summaries: ${analysisSummaryResponse.status}`);
       }
 
-      const repositoryPayload =
-        (await repositoryResponse.json()) as RepositoryTargetDto[];
-      const analysisSummaryPayload =
-        (await analysisSummaryResponse.json()) as AnalysisSummaryDto[];
+      const repositoryPayload = (await repositoryResponse.json()) as RepositoryTargetDto[];
+      const analysisSummaryPayload = (await analysisSummaryResponse.json()) as AnalysisSummaryDto[];
 
       setRepositories(repositoryPayload);
       setAnalysisSummaries(
-        Object.fromEntries(
-          analysisSummaryPayload.map((analysis) => [analysis.job.id, analysis]),
-        ),
+        Object.fromEntries(analysisSummaryPayload.map((analysis) => [analysis.job.id, analysis])),
       );
     } catch (requestError) {
-      setError(
-        requestError instanceof Error
-          ? requestError.message
-          : "failed to load workspace",
-      );
+      setError(requestError instanceof Error ? requestError.message : "failed to load workspace");
     } finally {
       setLoading(false);
     }
@@ -125,11 +110,7 @@ export function App() {
         [repositoryId]: payload.modules,
       }));
     } catch (requestError) {
-      setError(
-        requestError instanceof Error
-          ? requestError.message
-          : "failed to detect modules",
-      );
+      setError(requestError instanceof Error ? requestError.message : "failed to detect modules");
     } finally {
       setModuleLoading((current) => ({ ...current, [repositoryId]: false }));
     }
@@ -161,9 +142,7 @@ export function App() {
       await loadWorkspace();
     } catch (requestError) {
       setError(
-        requestError instanceof Error
-          ? requestError.message
-          : "repository registration failed",
+        requestError instanceof Error ? requestError.message : "repository registration failed",
       );
     } finally {
       setSubmitting(false);
@@ -230,11 +209,7 @@ export function App() {
       }));
       return analysis;
     } catch (requestError) {
-      setError(
-        requestError instanceof Error
-          ? requestError.message
-          : "failed to run analysis",
-      );
+      setError(requestError instanceof Error ? requestError.message : "failed to run analysis");
       return null;
     } finally {
       setAnalysisLoading((current) => ({ ...current, [loadingKey]: false }));
@@ -294,9 +269,7 @@ export function App() {
       );
     } catch (requestError) {
       setError(
-        requestError instanceof Error
-          ? requestError.message
-          : "failed to delete repository",
+        requestError instanceof Error ? requestError.message : "failed to delete repository",
       );
     } finally {
       setDeleteLoading((current) => ({ ...current, [repository.id]: false }));
@@ -305,16 +278,14 @@ export function App() {
 
   const latestAnalysesByRepository = Object.values(analysisSummaries)
     .filter((analysis) => analysis.job.sampling === selectedSampling)
-    .reduce<
-    Record<string, AnalysisSummaryDto>
-  >((accumulator, analysis) => {
-    const current = accumulator[analysis.job.repositoryId];
-    if (!current || current.job.createdAt < analysis.job.createdAt) {
-      accumulator[analysis.job.repositoryId] = analysis;
-    }
+    .reduce<Record<string, AnalysisSummaryDto>>((accumulator, analysis) => {
+      const current = accumulator[analysis.job.repositoryId];
+      if (!current || current.job.createdAt < analysis.job.createdAt) {
+        accumulator[analysis.job.repositoryId] = analysis;
+      }
 
-    return accumulator;
-  }, {});
+      return accumulator;
+    }, {});
 
   return (
     <div className="app-shell">
@@ -339,7 +310,9 @@ export function App() {
             </span>
           </Link>
 
-          <div className={`sidebar-link ${location.pathname.startsWith("/analyses/") ? "active" : ""}`}>
+          <div
+            className={`sidebar-link ${location.pathname.startsWith("/analyses/") ? "active" : ""}`}
+          >
             <span className="sidebar-link-icon">02</span>
             <span className="sidebar-link-copy">
               <strong>分析结果</strong>
@@ -378,9 +351,7 @@ export function App() {
 
           <div className="topbar-meta">
             <span className="mono-badge">{repositories.length} 仓库</span>
-            <span className="mono-badge">
-              {Object.keys(analysisSummaries).length} 分析
-            </span>
+            <span className="mono-badge">{Object.keys(analysisSummaries).length} 分析</span>
           </div>
         </header>
 

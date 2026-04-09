@@ -1,9 +1,4 @@
-import type {
-  AnalysisProgress,
-  MetricPoint,
-  ModuleUnit,
-  Snapshot,
-} from "@code-dance/domain";
+import type { AnalysisProgress, MetricPoint, ModuleUnit, Snapshot } from "@code-dance/domain";
 import {
   detectNodeModulesAtRevision,
   listCommits,
@@ -17,6 +12,7 @@ import type {
   AnalyzeRepositoryHistoryOutput,
 } from "../shared/types.js";
 import { countModuleLocAtRevision } from "../shared/loc-counter.js";
+import { estimateSnapshotEtaSeconds } from "../shared/progress-estimate.js";
 
 export type AnalyzeNodeHistoryInput = AnalyzeRepositoryHistoryInput;
 export type AnalyzeNodeHistoryOutput = AnalyzeRepositoryHistoryOutput;
@@ -90,18 +86,15 @@ export async function analyzeNodeHistory(
   for (let snapshotIndex = 0; snapshotIndex < sampledCommits.length; snapshotIndex += 1) {
     const commit = sampledCommits[snapshotIndex]!;
     const previousCommit = sampledCommits[snapshotIndex - 1] ?? null;
-    const modules = (await detectNodeModulesAtRevision(input.localPath, commit.hash))
-      .filter((module) => module.files.length > 0);
+    const modules = (await detectNodeModulesAtRevision(input.localPath, commit.hash)).filter(
+      (module) => module.files.length > 0,
+    );
     const currentModulesByKey = new Map(modules.map((module) => [module.key, module]));
     const locFiles = countDistinctModuleFiles(modules);
     const diffRows =
       previousCommit === null
         ? []
-        : await readNumstatBetweenRevisions(
-            input.localPath,
-            previousCommit.hash,
-            commit.hash,
-          );
+        : await readNumstatBetweenRevisions(input.localPath, previousCommit.hash, commit.hash);
     const totalWorkUnits = locFiles + diffRows.length;
 
     snapshots.push({
@@ -111,6 +104,7 @@ export async function analyzeNodeHistory(
     });
 
     let processedWorkUnits = 0;
+    const currentSnapshotStartedAtMs = Date.now();
     const moduleNameByKey = new Map(modules.map((module) => [module.key, module.name]));
     const locByModule = await countModuleLocAtRevision({
       localPath: input.localPath,
@@ -128,6 +122,7 @@ export async function analyzeNodeHistory(
           currentFiles: totalWorkUnits,
           processedFiles: processedWorkUnits,
           startedAtMs,
+          currentSnapshotStartedAtMs,
         });
       },
     });
@@ -174,6 +169,7 @@ export async function analyzeNodeHistory(
           currentFiles: totalWorkUnits,
           processedFiles: processedWorkUnits,
           startedAtMs,
+          currentSnapshotStartedAtMs,
         });
       }
     }
@@ -183,7 +179,7 @@ export async function analyzeNodeHistory(
       const diffMetric =
         previousCommit === null
           ? { added: loc, deleted: 0, churn: loc }
-          : diffMetricsByModule.get(module.key) ?? { added: 0, deleted: 0, churn: 0 };
+          : (diffMetricsByModule.get(module.key) ?? { added: 0, deleted: 0, churn: 0 });
 
       points.push({
         analysisId: input.analysisId,
@@ -236,6 +232,7 @@ export async function analyzeNodeHistory(
       currentFiles: totalWorkUnits,
       processedFiles: totalWorkUnits,
       startedAtMs,
+      currentSnapshotStartedAtMs,
       forceCompletedSnapshots: snapshotIndex + 1,
     });
   }
@@ -317,16 +314,7 @@ function isWithinModuleRoot(filePath: string, rootPath: string): boolean {
   return filePath === rootPath || filePath.startsWith(`${rootPath}/`);
 }
 
-const FRONTEND_SOURCE_EXTENSIONS = [
-  ".ts",
-  ".tsx",
-  ".js",
-  ".jsx",
-  ".mjs",
-  ".cjs",
-  ".html",
-  ".css",
-];
+const FRONTEND_SOURCE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".html", ".css"];
 
 function isFrontendSourcePath(filePath: string): boolean {
   return FRONTEND_SOURCE_EXTENSIONS.some((extension) => filePath.endsWith(extension));
@@ -342,28 +330,24 @@ async function publishSnapshotProgress(input: {
   currentFiles: number;
   processedFiles: number;
   startedAtMs: number;
+  currentSnapshotStartedAtMs: number;
   forceCompletedSnapshots?: number;
 }) {
   const completedSnapshots = input.forceCompletedSnapshots ?? input.snapshotIndex;
-  const snapshotFraction =
-    input.currentFiles > 0 ? input.processedFiles / input.currentFiles : 1;
+  const snapshotFraction = input.currentFiles > 0 ? input.processedFiles / input.currentFiles : 1;
   const totalFraction =
     (input.snapshotIndex + snapshotFraction) / Math.max(input.sampledCommits, 1);
   const percent = 10 + totalFraction * 85;
 
-  const elapsedSeconds = Math.max((Date.now() - input.startedAtMs) / 1000, 0.001);
-  const effectiveCompleted =
-    input.snapshotIndex + snapshotFraction > 0
-      ? input.snapshotIndex + snapshotFraction
-      : 0;
-  const averagePerSnapshotSeconds =
-    effectiveCompleted > 0 ? elapsedSeconds / effectiveCompleted : null;
-  const remainingSnapshots =
-    input.sampledCommits - (input.snapshotIndex + snapshotFraction);
-  const etaSeconds =
-    averagePerSnapshotSeconds !== null
-      ? Math.max(Math.ceil(averagePerSnapshotSeconds * remainingSnapshots), 0)
-      : null;
+  const etaSeconds = estimateSnapshotEtaSeconds({
+    sampledCommits: input.sampledCommits,
+    snapshotIndex: input.snapshotIndex,
+    currentFiles: input.currentFiles,
+    processedFiles: input.processedFiles,
+    startedAtMs: input.startedAtMs,
+    currentSnapshotStartedAtMs: input.currentSnapshotStartedAtMs,
+    forceCompletedSnapshots: input.forceCompletedSnapshots,
+  });
 
   await publishProgress(input.input, {
     phase: "analyzing-snapshots",
@@ -381,9 +365,6 @@ async function publishSnapshotProgress(input: {
   });
 }
 
-async function publishProgress(
-  input: AnalyzeNodeHistoryInput,
-  progress: AnalysisProgress,
-) {
+async function publishProgress(input: AnalyzeNodeHistoryInput, progress: AnalysisProgress) {
   await input.onProgress?.(progress);
 }

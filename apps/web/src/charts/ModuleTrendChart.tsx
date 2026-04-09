@@ -3,17 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import * as echarts from "echarts";
 
 import type { SeriesResponseDto } from "@code-dance/contracts";
-import {
-  buildMetricSeriesFromQuery,
-  formatMetricLabel,
-  type MetricKey,
-} from "../analysis-data";
-import {
-  axisStyle,
-  baseGrid,
-  createBaseChart,
-  createMetricTooltip,
-} from "./chart-helpers";
+import { buildMetricSeriesFromQuery, formatMetricLabel, type MetricKey } from "../analysis-data";
+import { axisStyle, baseGrid, createBaseChart, createMetricTooltip } from "./chart-helpers";
 
 type ModuleTrendChartProps = {
   analysisId: string;
@@ -209,7 +200,9 @@ export function ModuleTrendChart({ analysisId, seriesByMetric }: ModuleTrendChar
       <div className="chart-toolbar chart-toolbar-stacked">
         <div>
           <h3>模块趋势图</h3>
-          <p className="chart-subtitle">这里只对少量核心模块做趋势对比，支持真实 diff 指标切换、搜索、手动勾选和时间缩放。</p>
+          <p className="chart-subtitle">
+            这里只对少量核心模块做趋势对比，支持真实 diff 指标切换、搜索、手动勾选和时间缩放。
+          </p>
         </div>
         <div className="chart-toolbar-inline">
           <div className="metric-switch">

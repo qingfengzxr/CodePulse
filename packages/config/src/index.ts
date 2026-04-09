@@ -9,9 +9,7 @@ export const moduleRuleSchema = z.object({
 export const analysisConfigSchema = z.object({
   repository: z.object({
     branch: z.string().default("main"),
-    sampling: z
-      .enum(["daily", "weekly", "monthly", "tag-based", "per-commit"])
-      .default("weekly"),
+    sampling: z.enum(["daily", "weekly", "monthly", "tag-based", "per-commit"]).default("weekly"),
   }),
   modules: z.array(moduleRuleSchema).default([]),
 });

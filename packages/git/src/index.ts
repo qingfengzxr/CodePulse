@@ -30,9 +30,7 @@ export type DiffStatRow = {
   isBinary: boolean;
 };
 
-export async function probeLocalRepository(
-  localPath: string,
-): Promise<LocalRepositoryProbe> {
+export async function probeLocalRepository(localPath: string): Promise<LocalRepositoryProbe> {
   await access(localPath, fsConstants.R_OK);
 
   const pathStat = await stat(localPath);
@@ -71,9 +69,7 @@ async function readDefaultBranch(localPath: string): Promise<string | null> {
   }
 }
 
-async function detectRepositoryKinds(
-  localPath: string,
-): Promise<RepositoryKind[]> {
+async function detectRepositoryKinds(localPath: string): Promise<RepositoryKind[]> {
   const detected = new Set<RepositoryKind>();
 
   if (await fileExists(join(localPath, "Cargo.toml"))) {
@@ -117,10 +113,7 @@ export async function readCargoToml(localPath: string): Promise<string | null> {
   return readFile(cargoTomlPath, "utf8");
 }
 
-export async function listCommits(
-  localPath: string,
-  branch: string,
-): Promise<GitCommit[]> {
+export async function listCommits(localPath: string, branch: string): Promise<GitCommit[]> {
   const { stdout } = await execFileAsync("git", [
     "-C",
     localPath,
@@ -144,10 +137,7 @@ export async function listCommits(
     });
 }
 
-export function sampleCommits(
-  commits: GitCommit[],
-  sampling: AnalysisSampling,
-): GitCommit[] {
+export function sampleCommits(commits: GitCommit[], sampling: AnalysisSampling): GitCommit[] {
   if (sampling === "per-commit") {
     return commits;
   }
@@ -157,26 +147,22 @@ export function sampleCommits(
   }
 
   if (sampling === "daily") {
-    return sampleCommitsByBucket(commits, (commit) =>
-      commit.committedAt.slice(0, 10),
-    );
+    return sampleCommitsByBucket(commits, (commit) => commit.committedAt.slice(0, 10));
   }
 
   if (sampling === "monthly") {
-    return sampleCommitsByBucket(commits, (commit) =>
-      commit.committedAt.slice(0, 7),
-    );
+    return sampleCommitsByBucket(commits, (commit) => commit.committedAt.slice(0, 7));
   }
 
   return sampleCommitsByBucket(commits, (commit) => {
     const date = new Date(commit.committedAt);
-    const weekDate = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+    const weekDate = new Date(
+      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+    );
     const day = weekDate.getUTCDay() || 7;
     weekDate.setUTCDate(weekDate.getUTCDate() + 4 - day);
     const yearStart = new Date(Date.UTC(weekDate.getUTCFullYear(), 0, 1));
-    const weekNumber = Math.ceil(
-      (((weekDate.getTime() - yearStart.getTime()) / 86400000) + 1) / 7,
-    );
+    const weekNumber = Math.ceil(((weekDate.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
     return `${weekDate.getUTCFullYear()}-W${String(weekNumber).padStart(2, "0")}`;
   });
 }
@@ -212,15 +198,14 @@ export async function readTextFileAtRevision(
   filePath: string,
 ): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync("git", [
-      "-C",
-      localPath,
-      "show",
-      `${revision}:${filePath}`,
-    ], {
-      encoding: "utf8",
-      maxBuffer: 8 * 1024 * 1024,
-    });
+    const { stdout } = await execFileAsync(
+      "git",
+      ["-C", localPath, "show", `${revision}:${filePath}`],
+      {
+        encoding: "utf8",
+        maxBuffer: 8 * 1024 * 1024,
+      },
+    );
 
     return typeof stdout === "string" ? stdout : String(stdout);
   } catch {
@@ -228,10 +213,7 @@ export async function readTextFileAtRevision(
   }
 }
 
-export async function listFilesAtRevision(
-  localPath: string,
-  revision: string,
-): Promise<string[]> {
+export async function listFilesAtRevision(localPath: string, revision: string): Promise<string[]> {
   const { stdout } = await execFileAsync("git", [
     "-C",
     localPath,
@@ -254,16 +236,7 @@ export async function readNumstatBetweenRevisions(
 ): Promise<DiffStatRow[]> {
   const { stdout } = await execFileAsync(
     "git",
-    [
-      "-C",
-      localPath,
-      "diff",
-      "--numstat",
-      "-z",
-      "-M",
-      fromRevision,
-      toRevision,
-    ],
+    ["-C", localPath, "diff", "--numstat", "-z", "-M", fromRevision, toRevision],
     {
       encoding: "utf8",
       maxBuffer: 16 * 1024 * 1024,
@@ -280,9 +253,7 @@ export async function detectRustModulesAtRevision(
   return detectRustModulesFromReader(createGitRevisionReader(localPath, revision));
 }
 
-export async function detectNodeModules(
-  localPath: string,
-): Promise<ModuleUnit[]> {
+export async function detectNodeModules(localPath: string): Promise<ModuleUnit[]> {
   return detectNodeModulesFromReader(createLocalSnapshotReader(localPath));
 }
 
@@ -319,13 +290,7 @@ type RustCrate = {
   manifestPath: string;
 };
 
-const IGNORED_DIRECTORIES = new Set([
-  ".git",
-  "node_modules",
-  "target",
-  "dist",
-  "build",
-]);
+const IGNORED_DIRECTORIES = new Set([".git", "node_modules", "target", "dist", "build"]);
 
 export async function detectRustModules(localPath: string): Promise<ModuleUnit[]> {
   return detectRustModulesFromReader(createLocalSnapshotReader(localPath));
@@ -369,8 +334,8 @@ async function resolveWorkspaceMembers(
   const members = manifest.workspace?.members ?? [];
   const rootEntries = new Map<string, RustCrate>();
   const repositoryFiles = await reader.listFiles();
-  const cargoManifestPaths = repositoryFiles.filter((filePath) =>
-    filePath === "Cargo.toml" || filePath.endsWith("/Cargo.toml"),
+  const cargoManifestPaths = repositoryFiles.filter(
+    (filePath) => filePath === "Cargo.toml" || filePath.endsWith("/Cargo.toml"),
   );
 
   for (const memberPattern of members) {
@@ -427,15 +392,13 @@ async function buildRustModuleUnits(
   return crates.map((crate) => {
     const excludedRoots = crateRoots.filter(
       (candidate) =>
-        candidate !== crate.rootPath &&
-        isNestedRelativePath(candidate, crate.rootPath),
+        candidate !== crate.rootPath && isNestedRelativePath(candidate, crate.rootPath),
     );
 
     const files = repositoryFiles
       .filter((filePath) => isWithinRoot(filePath, crate.rootPath))
       .filter(
-        (filePath) =>
-          !excludedRoots.some((excludedRoot) => isWithinRoot(filePath, excludedRoot)),
+        (filePath) => !excludedRoots.some((excludedRoot) => isWithinRoot(filePath, excludedRoot)),
       )
       .sort((left, right) => left.localeCompare(right));
 
@@ -461,11 +424,7 @@ async function detectNodeModulesFromReader(
   const rootManifest = parseNodePackageManifest(packageJson);
   const repositoryFiles = await reader.listFiles();
   const packageMap = new Map<string, NodePackageEntry>();
-  const workspaceMembers = await resolveNodeWorkspaceMembers(
-    reader,
-    rootManifest,
-    repositoryFiles,
-  );
+  const workspaceMembers = await resolveNodeWorkspaceMembers(reader, rootManifest, repositoryFiles);
 
   for (const workspaceMember of workspaceMembers) {
     packageMap.set(workspaceMember.rootPath, workspaceMember);
@@ -510,8 +469,8 @@ async function resolveNodeWorkspaceMembers(
   }
 
   const rootEntries = new Map<string, NodePackageEntry>();
-  const packageManifestPaths = repositoryFiles.filter((filePath) =>
-    filePath === "package.json" || filePath.endsWith("/package.json"),
+  const packageManifestPaths = repositoryFiles.filter(
+    (filePath) => filePath === "package.json" || filePath.endsWith("/package.json"),
   );
 
   for (const memberPattern of members) {
@@ -586,16 +545,13 @@ async function buildNodeModuleUnits(
   return packages
     .map((pkg) => {
       const excludedRoots = packageRoots.filter(
-        (candidate) =>
-          candidate !== pkg.rootPath &&
-          isNestedRelativePath(candidate, pkg.rootPath),
+        (candidate) => candidate !== pkg.rootPath && isNestedRelativePath(candidate, pkg.rootPath),
       );
 
       const files = repositoryFiles
         .filter((filePath) => isWithinRoot(filePath, pkg.rootPath))
         .filter(
-          (filePath) =>
-            !excludedRoots.some((excludedRoot) => isWithinRoot(filePath, excludedRoot)),
+          (filePath) => !excludedRoots.some((excludedRoot) => isWithinRoot(filePath, excludedRoot)),
         )
         .filter((filePath) => isFrontendSourceFile(filePath))
         .sort((left, right) => left.localeCompare(right));
@@ -624,9 +580,7 @@ const FRONTEND_SOURCE_EXTENSIONS = new Set([
 ]);
 
 function isFrontendSourceFile(filePath: string): boolean {
-  return Array.from(FRONTEND_SOURCE_EXTENSIONS).some((extension) =>
-    filePath.endsWith(extension),
-  );
+  return Array.from(FRONTEND_SOURCE_EXTENSIONS).some((extension) => filePath.endsWith(extension));
 }
 
 const NESTED_NODE_CONTAINER_DIRS = new Set(["apps", "packages", "services", "os"]);
@@ -808,10 +762,7 @@ type RepositorySnapshotReader = {
   listFiles(): Promise<string[]>;
 };
 
-function createGitRevisionReader(
-  localPath: string,
-  revision: string,
-): RepositorySnapshotReader {
+function createGitRevisionReader(localPath: string, revision: string): RepositorySnapshotReader {
   let cachedFilesPromise: Promise<string[]> | null = null;
 
   return {
@@ -862,20 +813,14 @@ async function collectLocalRepositoryFilesRecursive(
 
   for (const entry of entries) {
     const absoluteEntryPath = join(currentAbsolutePath, entry.name);
-    const relativeEntryPath = normalizeRelativePath(
-      relative(repositoryRoot, absoluteEntryPath),
-    );
+    const relativeEntryPath = normalizeRelativePath(relative(repositoryRoot, absoluteEntryPath));
 
     if (entry.isDirectory()) {
       if (IGNORED_DIRECTORIES.has(entry.name)) {
         continue;
       }
 
-      await collectLocalRepositoryFilesRecursive(
-        repositoryRoot,
-        absoluteEntryPath,
-        files,
-      );
+      await collectLocalRepositoryFilesRecursive(repositoryRoot, absoluteEntryPath, files);
       continue;
     }
 
@@ -903,7 +848,7 @@ function dirnameFromManifest(manifestPath: string, manifestFileName: string): st
     return ".";
   }
 
-  return manifestPath.slice(0, -(`/${manifestFileName}`).length);
+  return manifestPath.slice(0, -`/${manifestFileName}`.length);
 }
 
 async function isGitRepository(localPath: string): Promise<boolean> {

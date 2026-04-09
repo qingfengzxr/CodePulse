@@ -578,8 +578,9 @@ a {
 
 .repository-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 22px;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 18px;
+  align-items: start;
 }
 
 .repository-card {
@@ -588,7 +589,7 @@ a {
   gap: 0;
   padding: 0;
   border: 1px solid var(--border);
-  border-radius: 24px;
+  border-radius: 22px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0.01)),
     var(--surface-2);
@@ -598,6 +599,7 @@ a {
     border-color 180ms ease,
     box-shadow 180ms ease;
   position: relative;
+  align-self: start;
 }
 
 .repository-card:hover {
@@ -608,53 +610,56 @@ a {
 
 .repository-card-body {
   display: grid;
-  gap: 16px;
-  padding: 22px;
+  gap: 14px;
+  padding: 18px;
 }
 
 .repository-title-row {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
+  gap: 14px;
   align-items: flex-start;
 }
 
 .repository-language {
-  margin-bottom: 6px;
+  margin-bottom: 4px;
   color: #7fb0ff;
   font-family: "JetBrains Mono", "SFMono-Regular", monospace;
-  font-size: 0.68rem;
+  font-size: 0.64rem;
   font-weight: 800;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
 .repository-title-row h3 {
   margin: 0;
-  font-size: 1.62rem;
+  font-size: 1.28rem;
   font-weight: 900;
-  letter-spacing: -0.04em;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
 }
 
 .repository-path {
-  margin: 12px 0 0;
-  padding: 11px 14px;
+  margin: 10px 0 0;
+  padding: 9px 12px;
   border: 1px solid rgba(255, 255, 255, 0.05);
-  border-radius: 14px;
+  border-radius: 12px;
   background: rgba(5, 5, 5, 0.78);
   color: var(--text-muted);
   font-family: "JetBrains Mono", "SFMono-Regular", monospace;
-  font-size: 0.78rem;
-  line-height: 1.6;
-  word-break: break-all;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .status-pill {
-  padding: 8px 12px;
+  padding: 7px 11px;
   border-radius: 999px;
-  font-size: 0.7rem;
+  font-size: 0.66rem;
   font-weight: 800;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
@@ -675,22 +680,22 @@ a {
 
 .meta-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .meta-card {
   display: grid;
-  gap: 8px;
-  padding: 14px 14px 13px;
-  border-radius: 18px;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 16px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.022), rgba(255, 255, 255, 0.012)),
     rgba(255, 255, 255, 0.02);
 }
 
 .meta-card strong {
-  font-size: 0.98rem;
+  font-size: 0.92rem;
   line-height: 1.2;
 }
 
@@ -709,13 +714,14 @@ a {
 }
 
 .module-actions {
-  gap: 10px;
+  gap: 8px;
 }
 
 .module-actions .ghost-button {
-  padding: 10px 13px;
-  border-radius: 14px;
+  padding: 9px 12px;
+  border-radius: 12px;
   background: rgba(255, 255, 255, 0.04);
+  font-size: 0.94rem;
 }
 
 .card-primary-action {
@@ -772,7 +778,7 @@ a {
 
 .repository-analysis-summary,
 .analysis-panel {
-  padding-top: 14px;
+  padding-top: 12px;
   border-top: 1px solid var(--border);
 }
 
@@ -781,7 +787,7 @@ a {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 16px 22px;
+  padding: 13px 18px;
   border-top: 1px solid var(--border);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent),
@@ -804,15 +810,15 @@ a {
 
 .repository-card-footer-meta {
   color: #b9c0cf;
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 700;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
 .repository-card-footer-link {
   color: #5d9cff;
-  font-size: 0.84rem;
+  font-size: 0.8rem;
   font-weight: 800;
   letter-spacing: 0.01em;
 }
@@ -884,26 +890,26 @@ a {
 }
 
 .summary-row {
-  margin-bottom: 12px;
+  margin-bottom: 8px;
   color: var(--text-muted);
-  font-size: 0.8rem;
+  font-size: 0.76rem;
 }
 
 .progress-block {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .progress-meta,
 .progress-detail {
   justify-content: space-between;
   color: var(--text-muted);
-  font-size: 0.82rem;
+  font-size: 0.76rem;
 }
 
 .progress-bar {
   overflow: hidden;
-  height: 10px;
+  height: 8px;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.04);
@@ -1254,6 +1260,10 @@ a {
 
   .hero-side {
     justify-items: start;
+  }
+
+  .meta-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

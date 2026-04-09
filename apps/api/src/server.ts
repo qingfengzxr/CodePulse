@@ -19,11 +19,7 @@ import {
 } from "@code-dance/contracts";
 import { analyzeRepositoryHistory, detectRepositoryModules } from "@code-dance/analyzer";
 import { probeLocalRepository } from "@code-dance/git";
-import {
-  createSqliteStorage,
-  defaultDatabasePath,
-  type SqliteStorage,
-} from "@code-dance/storage";
+import { createSqliteStorage, defaultDatabasePath, type SqliteStorage } from "@code-dance/storage";
 
 type CreateServerDeps = {
   storage?: SqliteStorage;
@@ -33,12 +29,10 @@ type CreateServerDeps = {
 };
 
 export function createServer(deps: CreateServerDeps = {}) {
-  const storage =
-    deps.storage ?? createSqliteStorage({ dbPath: process.env.CODE_DANCE_DB_PATH });
+  const storage = deps.storage ?? createSqliteStorage({ dbPath: process.env.CODE_DANCE_DB_PATH });
   const analyzeRepositoryHistoryImpl =
     deps.analyzeRepositoryHistoryImpl ?? analyzeRepositoryHistory;
-  const detectRepositoryModulesImpl =
-    deps.detectRepositoryModulesImpl ?? detectRepositoryModules;
+  const detectRepositoryModulesImpl = deps.detectRepositoryModulesImpl ?? detectRepositoryModules;
   const probeLocalRepositoryImpl = deps.probeLocalRepositoryImpl ?? probeLocalRepository;
 
   const app = Fastify({
@@ -402,11 +396,7 @@ async function runAnalysisTask(input: {
         await input.storage.analysisJobs.updateJob(input.analysisId, (current) => ({
           ...current,
           status:
-            progress.phase === "failed"
-              ? "failed"
-              : progress.phase === "done"
-                ? "done"
-                : "running",
+            progress.phase === "failed" ? "failed" : progress.phase === "done" ? "done" : "running",
         }));
         await input.storage.analysisJobs.upsertProgress(input.analysisId, progress);
       },
@@ -473,8 +463,7 @@ async function resumeInterruptedAnalyses(input: {
 }) {
   const summaries = await input.storage.query.listAnalysisSummaries();
   const interrupted = summaries.filter(
-    (summary) =>
-      summary.job.status === "pending" || summary.job.status === "running",
+    (summary) => summary.job.status === "pending" || summary.job.status === "running",
   );
 
   for (const summary of interrupted) {
@@ -559,7 +548,11 @@ async function markAnalysisAsFailed(
 }
 
 function sendApiError(
-  reply: { code: (statusCode: number) => { send: (payload: { error: string; message: string }) => unknown } },
+  reply: {
+    code: (statusCode: number) => {
+      send: (payload: { error: string; message: string }) => unknown;
+    };
+  },
   statusCode: number,
   error: string,
   message: unknown,

@@ -28,14 +28,10 @@ if (npmHost && !hasExplicitHostArg) {
   forwardedArgs.shift();
 }
 
-const child = spawn(
-  "pnpm",
-  ["--filter", "@code-dance/web", "dev", ...forwardedArgs],
-  {
-    stdio: "inherit",
-    shell: process.platform === "win32",
-  },
-);
+const child = spawn("pnpm", ["--filter", "@code-dance/web", "dev", ...forwardedArgs], {
+  stdio: "inherit",
+  shell: process.platform === "win32",
+});
 
 child.on("exit", (code, signal) => {
   if (signal) {

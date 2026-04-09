@@ -16,10 +16,7 @@ export function ModuleStackedAreaChart({ series }: ModuleStackedAreaChartProps) 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.EChartsType | null>(null);
   const [focusMode, setFocusMode] = useState<FocusMode>(8);
-  const { xAxis, modules, collapsedCount } = buildStackedAreaSeriesFromQuery(
-    series,
-    focusMode,
-  );
+  const { xAxis, modules, collapsedCount } = buildStackedAreaSeriesFromQuery(series, focusMode);
   const latestTotal = modules.reduce((sum, module) => sum + (module.values.at(-1) ?? 0), 0);
 
   useEffect(() => {
@@ -133,13 +130,17 @@ export function ModuleStackedAreaChart({ series }: ModuleStackedAreaChartProps) 
       <div className="chart-toolbar">
         <div>
           <h3>模块堆叠面积图</h3>
-          <p className="chart-subtitle">默认折叠长尾模块，先看结构占比和整体构成，再进入聚焦层做模块细查。</p>
+          <p className="chart-subtitle">
+            默认折叠长尾模块，先看结构占比和整体构成，再进入聚焦层做模块细查。
+          </p>
         </div>
         <div className="chart-toolbar-inline">
           <div className="chart-summary">
             <span className="chart-chip">总 LOC {formatMetricValue(latestTotal)}</span>
             {collapsedCount > 0 ? (
-              <span className="chart-chip chart-chip-muted">Others 吸收 {collapsedCount} 个模块</span>
+              <span className="chart-chip chart-chip-muted">
+                Others 吸收 {collapsedCount} 个模块
+              </span>
             ) : null}
           </div>
           <div className="chart-focus-switch">

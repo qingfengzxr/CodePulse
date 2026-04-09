@@ -261,9 +261,7 @@ export function AnalysisDetailPage({
   const totalChurn = queryState?.distributionsByMetric.churn
     ? getTotalDistributionValue(queryState.distributionsByMetric.churn)
     : 0;
-  const topModule = locSeries
-    ? buildMetricSeriesFromQuery(locSeries).modules[0]
-    : null;
+  const topModule = locSeries ? buildMetricSeriesFromQuery(locSeries).modules[0] : null;
 
   const peakLoc = totalLocSeries?.values.reduce((peak, value) => Math.max(peak, value), 0) ?? 0;
 
@@ -423,7 +421,8 @@ export function AnalysisDetailPage({
             <p className="panel-kicker">Analysis Detail</p>
             <h1 className="detail-title">{repository?.name ?? loadedAnalysis.job.repositoryId}</h1>
             <p className="hero-copy">
-              当前按 {getSamplingLabel(loadedAnalysis.job.sampling)} 采样展示仓库演化趋势，图表仍完全基于现有查询接口加载。
+              当前按 {getSamplingLabel(loadedAnalysis.job.sampling)}{" "}
+              采样展示仓库演化趋势，图表仍完全基于现有查询接口加载。
             </p>
             <div className="hero-filter detail-sampling-switch">
               {siblingAnalysesBySampling.map(({ sampling, analysis }) =>
@@ -450,7 +449,9 @@ export function AnalysisDetailPage({
               )}
             </div>
             <div className="detail-meta-strip">
-              <span className="mono-badge">{repository?.defaultBranch ?? loadedAnalysis.job.branch}</span>
+              <span className="mono-badge">
+                {repository?.defaultBranch ?? loadedAnalysis.job.branch}
+              </span>
               <span className="mono-badge">{loadedAnalysis.job.status}</span>
               <span className="mono-badge">{getSamplingLabel(loadedAnalysis.job.sampling)}</span>
               <span className="mono-badge">{loadedAnalysis.snapshots.length} 个采样点</span>

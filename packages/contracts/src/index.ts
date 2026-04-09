@@ -1,12 +1,6 @@
 import { z } from "zod";
 
-export const repositoryKindSchema = z.enum([
-  "rust",
-  "node",
-  "go",
-  "python",
-  "unknown",
-]);
+export const repositoryKindSchema = z.enum(["rust", "node", "go", "python", "unknown"]);
 
 export const repositoryStatusSchema = z.enum(["ready", "invalid", "syncing"]);
 
@@ -200,34 +194,24 @@ export const apiErrorSchema = z.object({
 });
 
 export type RepositoryTargetDto = z.infer<typeof repositoryTargetSchema>;
-export type CreateLocalRepositoryRequest = z.infer<
-  typeof createLocalRepositoryRequestSchema
->;
+export type CreateLocalRepositoryRequest = z.infer<typeof createLocalRepositoryRequestSchema>;
 export type ModuleUnitDto = z.infer<typeof moduleUnitSchema>;
-export type RepositoryModulesResponseDto = z.infer<
-  typeof repositoryModulesResponseSchema
->;
+export type RepositoryModulesResponseDto = z.infer<typeof repositoryModulesResponseSchema>;
 export type AnalysisJobDto = z.infer<typeof analysisJobSchema>;
 export type SnapshotDto = z.infer<typeof snapshotSchema>;
 export type SnapshotSummaryDto = z.infer<typeof snapshotSummarySchema>;
 export type MetricPointDto = z.infer<typeof metricPointSchema>;
 export type AnalysisProgressDto = z.infer<typeof analysisProgressSchema>;
 export type AnalysisSamplingDto = z.infer<typeof analysisSamplingSchema>;
-export type CreateAnalysisRequestDto = z.infer<
-  typeof createAnalysisRequestSchema
->;
+export type CreateAnalysisRequestDto = z.infer<typeof createAnalysisRequestSchema>;
 export type AnalysisMetricDto = z.infer<typeof analysisMetricSchema>;
-export type AnalysisModuleSummaryDto = z.infer<
-  typeof analysisModuleSummarySchema
->;
+export type AnalysisModuleSummaryDto = z.infer<typeof analysisModuleSummarySchema>;
 export type SeriesQueryDto = z.infer<typeof seriesQuerySchema>;
 export type SeriesModuleDto = z.infer<typeof seriesModuleSchema>;
 export type SeriesResponseDto = z.infer<typeof seriesResponseSchema>;
 export type DistributionQueryDto = z.infer<typeof distributionQuerySchema>;
 export type DistributionItemDto = z.infer<typeof distributionItemSchema>;
-export type DistributionResponseDto = z.infer<
-  typeof distributionResponseSchema
->;
+export type DistributionResponseDto = z.infer<typeof distributionResponseSchema>;
 export type RankingQueryDto = z.infer<typeof rankingQuerySchema>;
 export type RankingItemDto = z.infer<typeof rankingItemSchema>;
 export type RankingResponseDto = z.infer<typeof rankingResponseSchema>;

@@ -162,8 +162,7 @@ export function buildStackedAreaSeries(
   const { xAxis, modules } = buildMetricSeries(analysis, "loc");
   const visibleModules =
     visibleLimit === "all" ? modules : modules.slice(0, Math.max(1, visibleLimit));
-  const hiddenModules =
-    visibleLimit === "all" ? [] : modules.slice(Math.max(1, visibleLimit));
+  const hiddenModules = visibleLimit === "all" ? [] : modules.slice(Math.max(1, visibleLimit));
 
   const resultModules = visibleModules.map((module) => ({
     key: module.key,
@@ -192,19 +191,16 @@ export function getLatestSnapshot(analysis: AnalysisResultDto) {
   return analysis.snapshots.at(-1) ?? null;
 }
 
-export function getTotalMetric(
-  points: MetricPointDto[],
-  metric: MetricKey,
-  ts?: string,
-): number {
+export function getTotalMetric(points: MetricPointDto[], metric: MetricKey, ts?: string): number {
   return points
     .filter((point) => !ts || point.ts === ts)
     .reduce((sum, point) => sum + point[metric], 0);
 }
 
-export function buildMetricSeriesFromQuery(
-  series: SeriesResponseDto,
-): { xAxis: string[]; modules: MetricModuleSeries[] } {
+export function buildMetricSeriesFromQuery(series: SeriesResponseDto): {
+  xAxis: string[];
+  modules: MetricModuleSeries[];
+} {
   const xAxis = series.timeline.map((snapshot) => snapshot.ts);
   const modules = [...series.series]
     .map((entry) => ({
@@ -258,8 +254,7 @@ export function buildStackedAreaSeriesFromQuery(
   const { xAxis, modules } = buildMetricSeriesFromQuery(series);
   const visibleModules =
     visibleLimit === "all" ? modules : modules.slice(0, Math.max(1, visibleLimit));
-  const hiddenModules =
-    visibleLimit === "all" ? [] : modules.slice(Math.max(1, visibleLimit));
+  const hiddenModules = visibleLimit === "all" ? [] : modules.slice(Math.max(1, visibleLimit));
 
   const resultModules = visibleModules.map((module) => ({
     key: module.key,
@@ -326,12 +321,18 @@ export function buildCandlestickSeriesFromQueries(input: {
   const locSeries = buildMetricSeriesFromQuery(input.loc);
   const addedByModule = input.added
     ? new Map(
-        buildMetricSeriesFromQuery(input.added).modules.map((module) => [module.key, module.values]),
+        buildMetricSeriesFromQuery(input.added).modules.map((module) => [
+          module.key,
+          module.values,
+        ]),
       )
     : new Map<string, number[]>();
   const deletedByModule = input.deleted
     ? new Map(
-        buildMetricSeriesFromQuery(input.deleted).modules.map((module) => [module.key, module.values]),
+        buildMetricSeriesFromQuery(input.deleted).modules.map((module) => [
+          module.key,
+          module.values,
+        ]),
       )
     : new Map<string, number[]>();
 
@@ -341,7 +342,7 @@ export function buildCandlestickSeriesFromQueries(input: {
       const addedValues = addedByModule.get(module.key) ?? [];
       const deletedValues = deletedByModule.get(module.key) ?? [];
       const candles = module.values.map((close, index) => {
-        const previousClose = index === 0 ? 0 : module.values[index - 1] ?? 0;
+        const previousClose = index === 0 ? 0 : (module.values[index - 1] ?? 0);
         const added = addedValues[index] ?? (index === 0 ? close : 0);
         const deleted = deletedValues[index] ?? 0;
         const open = previousClose;

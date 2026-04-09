@@ -15,10 +15,12 @@ export type AnalyzeRepositoryHistoryInput = {
   startedAt: string;
   onProgress?: (progress: AnalysisProgress) => void | Promise<void>;
   // Test-only hook for forcing analyzer outputs without touching the filesystem.
-  __testOverrides?: Partial<Record<
-    "rust" | "node",
-    (input: AnalyzeRepositoryHistoryInput) => Promise<AnalyzeRepositoryHistoryOutput>
-  >>;
+  __testOverrides?: Partial<
+    Record<
+      "rust" | "node",
+      (input: AnalyzeRepositoryHistoryInput) => Promise<AnalyzeRepositoryHistoryOutput>
+    >
+  >;
 };
 
 export type AnalyzeRepositoryHistoryOutput = {

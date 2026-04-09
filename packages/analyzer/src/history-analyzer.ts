@@ -65,14 +65,17 @@ function mergeAnalyzerResults(
   const baselineSnapshots = firstResult.output.snapshots;
 
   for (const result of restResults) {
-    assertMatchingSnapshots(baselineSnapshots, result.output.snapshots, firstResult.name, result.name);
+    assertMatchingSnapshots(
+      baselineSnapshots,
+      result.output.snapshots,
+      firstResult.name,
+      result.name,
+    );
   }
 
   return {
     snapshots: baselineSnapshots,
-    points: results
-      .flatMap((result) => result.output.points)
-      .sort(compareMetricPoints),
+    points: results.flatMap((result) => result.output.points).sort(compareMetricPoints),
   };
 }
 

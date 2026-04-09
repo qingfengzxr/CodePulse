@@ -120,7 +120,9 @@ export function RepositoryScaleChart({ series }: RepositoryScaleChartProps) {
       <div className="chart-toolbar">
         <div>
           <h3>仓库总 LOC 趋势</h3>
-          <p className="chart-subtitle">回答“整体规模如何变化”，只展示总量，不在这里堆叠模块细节。</p>
+          <p className="chart-subtitle">
+            回答“整体规模如何变化”，只展示总量，不在这里堆叠模块细节。
+          </p>
         </div>
         <div className="chart-summary">
           <span className="chart-chip">当前 {formatMetricValue(latestLoc)}</span>

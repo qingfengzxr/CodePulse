@@ -203,8 +203,9 @@ export function createSqliteStorage(options?: { dbPath?: string }): SqliteStorag
         }
 
         db.prepare(`delete from analysis_jobs where repository_id = ?`).run(repositoryId);
-        return db.prepare(`delete from repository_targets where id = ?`).run(repositoryId)
-          .changes > 0;
+        return (
+          db.prepare(`delete from repository_targets where id = ?`).run(repositoryId).changes > 0
+        );
       });
 
       return transaction(id);
@@ -441,8 +442,7 @@ export function createSqliteStorage(options?: { dbPath?: string }): SqliteStorag
         return null;
       }
 
-      const moduleKeys =
-        input.moduleKeys && input.moduleKeys.length > 0 ? input.moduleKeys : null;
+      const moduleKeys = input.moduleKeys && input.moduleKeys.length > 0 ? input.moduleKeys : null;
       const rows = readSeriesRows(db, input.analysisId, moduleKeys);
       const seqToIndex = new Map(timeline.map((snapshot, index) => [snapshot.seq, index]));
       const grouped = new Map<
@@ -574,12 +574,7 @@ export function createSqliteStorage(options?: { dbPath?: string }): SqliteStorag
           );
 
           if (!seenModuleKeys.has(point.moduleKey)) {
-            moduleInsert.run(
-              input.analysisId,
-              point.moduleKey,
-              point.moduleName,
-              point.moduleKind,
-            );
+            moduleInsert.run(input.analysisId, point.moduleKey, point.moduleName, point.moduleKind);
             seenModuleKeys.add(point.moduleKey);
           }
         }
@@ -684,11 +679,7 @@ function initializeSchema(db: Database.Database) {
   `);
 }
 
-function readSeriesRows(
-  db: Database.Database,
-  analysisId: string,
-  moduleKeys: string[] | null,
-) {
+function readSeriesRows(db: Database.Database, analysisId: string, moduleKeys: string[] | null) {
   if (!moduleKeys || moduleKeys.length === 0) {
     return db
       .prepare(
@@ -738,10 +729,7 @@ function resolveSnapshot(
   return row ? mapSnapshotSummaryRow(row) : null;
 }
 
-function getAnalysisProgress(
-  db: Database.Database,
-  analysisId: string,
-): AnalysisProgress | null {
+function getAnalysisProgress(db: Database.Database, analysisId: string): AnalysisProgress | null {
   const row = db
     .prepare(
       `select analysis_id, phase, percent, total_commits, sampled_commits, completed_snapshots, current_commit,

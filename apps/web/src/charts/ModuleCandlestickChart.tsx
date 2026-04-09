@@ -3,10 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as echarts from "echarts";
 
 import type { SeriesResponseDto } from "@code-dance/contracts";
-import {
-  buildCandlestickSeriesFromQueries,
-  formatMetricValue,
-} from "../analysis-data";
+import { buildCandlestickSeriesFromQueries, formatMetricValue } from "../analysis-data";
 import { axisStyle, baseGrid, createBaseChart, escapeHtml } from "./chart-helpers";
 
 type ModuleCandlestickChartProps = {
@@ -44,15 +41,12 @@ export function ModuleCandlestickChart({ seriesByMetric }: ModuleCandlestickChar
 
     return left.name.localeCompare(right.name);
   });
-  const visibleModules =
-    focusMode === "all" ? rankedModules : rankedModules.slice(0, focusMode);
+  const visibleModules = focusMode === "all" ? rankedModules : rankedModules.slice(0, focusMode);
   const filteredModules = visibleModules.filter((module) =>
     module.name.toLowerCase().includes(searchQuery.trim().toLowerCase()),
   );
   const selectedModule =
-    visibleModules.find((module) => module.key === selectedModuleKey) ??
-    visibleModules[0] ??
-    null;
+    visibleModules.find((module) => module.key === selectedModuleKey) ?? visibleModules[0] ?? null;
 
   useEffect(() => {
     setSelectedModuleKey(visibleModules[0]?.key ?? null);
@@ -180,8 +174,8 @@ export function ModuleCandlestickChart({ seriesByMetric }: ModuleCandlestickChar
         <div>
           <h3>{selectedModule ? `${selectedModule.name} / LOC K 线图` : "crate / LOC K 线图"}</h3>
           <p className="chart-subtitle">
-            把模块当成交易对来玩。Open 是上一个采样点 LOC，Close 是当前 LOC，High / Low
-            用 added / deleted 推导区间。
+            把模块当成交易对来玩。Open 是上一个采样点 LOC，Close 是当前 LOC，High / Low 用 added /
+            deleted 推导区间。
           </p>
         </div>
         <div className="chart-toolbar-inline">
@@ -211,9 +205,7 @@ export function ModuleCandlestickChart({ seriesByMetric }: ModuleCandlestickChar
 
       <div className="chart-filter-bar">
         <div className="chart-summary">
-          <span className="chart-chip">
-            {visibleModules.length} 个候选 crate
-          </span>
+          <span className="chart-chip">{visibleModules.length} 个候选 crate</span>
           <span className="chart-chip chart-chip-muted">只是好玩，但看起来还真像那么回事</span>
         </div>
         <label className="chart-search">
@@ -241,9 +233,7 @@ export function ModuleCandlestickChart({ seriesByMetric }: ModuleCandlestickChar
             <span>Close {formatMetricValue(module.closes.at(-1) ?? 0)}</span>
           </button>
         ))}
-        {filteredModules.length === 0 ? (
-          <p className="feedback">当前搜索没有命中交易对。</p>
-        ) : null}
+        {filteredModules.length === 0 ? <p className="feedback">当前搜索没有命中交易对。</p> : null}
       </div>
 
       <div className="chart-surface" ref={containerRef} />

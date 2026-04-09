@@ -104,11 +104,7 @@ export function RepositoryListPage({
             <h2>注册待分析仓库</h2>
             <p className="section-copy">输入本地 Git 仓库绝对路径，校验通过后会加入工作台。</p>
           </div>
-          <button
-            className="ghost-button"
-            onClick={() => void onRefreshWorkspace()}
-            type="button"
-          >
+          <button className="ghost-button" onClick={() => void onRefreshWorkspace()} type="button">
             刷新列表
           </button>
         </div>
@@ -161,9 +157,13 @@ export function RepositoryListPage({
                 <div className="repository-card-body">
                   <div className="repository-title-row">
                     <div>
-                      <div className="repository-language">{repository.detectedKinds.join(", ")}</div>
+                      <div className="repository-language">
+                        {repository.detectedKinds.join(", ")}
+                      </div>
                       <h3>{repository.name}</h3>
-                      <p className="repository-path">{repository.localPath}</p>
+                      <p className="repository-path" title={repository.localPath ?? undefined}>
+                        {repository.localPath}
+                      </p>
                     </div>
                     <span className={`status-pill status-${repository.status}`}>
                       {repository.status}
@@ -258,8 +258,7 @@ export function RepositoryListPage({
                         <span>任务 {analysis.job.id.slice(0, 8)}</span>
                         <span>{latestSnapshot?.ts.slice(0, 10) ?? "-"}</span>
                       </div>
-                      {(analysis.job.status === "pending" ||
-                        analysis.job.status === "running") ? (
+                      {analysis.job.status === "pending" || analysis.job.status === "running" ? (
                         <ProgressBar analysis={analysis} />
                       ) : null}
                     </div>

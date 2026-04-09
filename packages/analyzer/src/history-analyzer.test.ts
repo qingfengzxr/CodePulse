@@ -42,21 +42,11 @@ test("node/web analyzer detects workspace modules and analyzes ts html css histo
     );
     await writeFile(
       join(repoPath, "apps/web/src/app.tsx"),
-      [
-        "export function App() {",
-        "  return <main>Hello</main>;",
-        "}",
-        "",
-      ].join("\n"),
+      ["export function App() {", "  return <main>Hello</main>;", "}", ""].join("\n"),
     );
     await writeFile(
       join(repoPath, "packages/ui/src/button.ts"),
-      [
-        "export function Button() {",
-        "  return \"button\";",
-        "}",
-        "",
-      ].join("\n"),
+      ["export function Button() {", '  return "button";', "}", ""].join("\n"),
     );
     await writeFile(
       join(repoPath, "packages/ui/src/styles.css"),
@@ -71,16 +61,11 @@ test("node/web analyzer detects workspace modules and analyzes ts html css histo
 
     await writeFile(
       join(repoPath, "apps/web/src/app.tsx"),
-      [
-        "export function App() {",
-        "  return <main>Hello frontend</main>;",
-        "}",
-        "",
-      ].join("\n"),
+      ["export function App() {", "  return <main>Hello frontend</main>;", "}", ""].join("\n"),
     );
     await writeFile(
       join(repoPath, "apps/web/src/index.html"),
-      ["<main>", "  <div id=\"app\"></div>", "</main>", ""].join("\n"),
+      ["<main>", '  <div id="app"></div>', "</main>", ""].join("\n"),
     );
     await writeFile(
       join(repoPath, "packages/ui/src/styles.css"),
@@ -115,14 +100,10 @@ test("node/web analyzer detects workspace modules and analyzes ts html css histo
     assert.equal(result.points.length, 4);
 
     const latestWebPoint = result.points.find(
-      (point) =>
-        point.moduleKey === "node:package:web" &&
-        point.ts === "2026-04-08T00:00:00+00:00",
+      (point) => point.moduleKey === "node:package:web" && point.ts === "2026-04-08T00:00:00+00:00",
     );
     const latestUiPoint = result.points.find(
-      (point) =>
-        point.moduleKey === "node:package:ui" &&
-        point.ts === "2026-04-08T00:00:00+00:00",
+      (point) => point.moduleKey === "node:package:ui" && point.ts === "2026-04-08T00:00:00+00:00",
     );
 
     assert.ok(latestWebPoint);
@@ -158,39 +139,21 @@ test("node/web analyzer falls back to directory modules when workspace is absent
     );
     await writeFile(
       join(repoPath, "App.tsx"),
-      [
-        "export function App() {",
-        "  return <main>root</main>;",
-        "}",
-        "",
-      ].join("\n"),
+      ["export function App() {", "  return <main>root</main>;", "}", ""].join("\n"),
     );
     await writeFile(
       join(repoPath, "apps/browser/BrowserApp.tsx"),
-      [
-        "export function BrowserApp() {",
-        "  return <section>browser</section>;",
-        "}",
-        "",
-      ].join("\n"),
+      ["export function BrowserApp() {", "  return <section>browser</section>;", "}", ""].join(
+        "\n",
+      ),
     );
     await writeFile(
       join(repoPath, "os/config/index.ts"),
-      [
-        "export const runtimeConfig = {",
-        "  mode: \"demo\",",
-        "};",
-        "",
-      ].join("\n"),
+      ["export const runtimeConfig = {", '  mode: "demo",', "};", ""].join("\n"),
     );
     await writeFile(
       join(repoPath, "components/Widget.tsx"),
-      [
-        "export function Widget() {",
-        "  return <div>widget</div>;",
-        "}",
-        "",
-      ].join("\n"),
+      ["export function Widget() {", "  return <div>widget</div>;", "}", ""].join("\n"),
     );
 
     const modules = await detectRepositoryModules({
@@ -198,15 +161,12 @@ test("node/web analyzer falls back to directory modules when workspace is absent
       detectedKinds: ["node"],
     });
 
-    assert.deepEqual(
-      modules.map((module) => module.key).sort(),
-      [
-        "node:package:apps-browser",
-        "node:package:components",
-        "node:package:cos",
-        "node:package:os-config",
-      ],
-    );
+    assert.deepEqual(modules.map((module) => module.key).sort(), [
+      "node:package:apps-browser",
+      "node:package:components",
+      "node:package:cos",
+      "node:package:os-config",
+    ]);
     assert.ok(modules.some((module) => module.name === "apps/browser"));
     assert.ok(modules.some((module) => module.name === "os/config"));
     assert.ok(modules.some((module) => module.name === "components"));
@@ -226,30 +186,15 @@ test("mixed rust and node repository aggregates analyzer outputs into one result
 
     await writeFile(
       join(repoPath, "Cargo.toml"),
-      [
-        "[workspace]",
-        'members = ["crates/*"]',
-        "",
-      ].join("\n"),
+      ["[workspace]", 'members = ["crates/*"]', ""].join("\n"),
     );
     await writeFile(
       join(repoPath, "crates/core/Cargo.toml"),
-      [
-        "[package]",
-        'name = "core"',
-        'version = "0.1.0"',
-        'edition = "2021"',
-        "",
-      ].join("\n"),
+      ["[package]", 'name = "core"', 'version = "0.1.0"', 'edition = "2021"', ""].join("\n"),
     );
     await writeFile(
       join(repoPath, "crates/core/src/lib.rs"),
-      [
-        "pub fn value() -> i32 {",
-        "    1",
-        "}",
-        "",
-      ].join("\n"),
+      ["pub fn value() -> i32 {", "    1", "}", ""].join("\n"),
     );
     await writeFile(
       join(repoPath, "package.json"),
@@ -269,12 +214,7 @@ test("mixed rust and node repository aggregates analyzer outputs into one result
     );
     await writeFile(
       join(repoPath, "apps/web/src/app.tsx"),
-      [
-        "export function App() {",
-        "  return <main>Hello</main>;",
-        "}",
-        "",
-      ].join("\n"),
+      ["export function App() {", "  return <main>Hello</main>;", "}", ""].join("\n"),
     );
 
     await git(repoPath, ["init"]);
@@ -285,25 +225,15 @@ test("mixed rust and node repository aggregates analyzer outputs into one result
 
     await writeFile(
       join(repoPath, "crates/core/src/lib.rs"),
-      [
-        "pub fn value() -> i32 {",
-        "    2",
-        "}",
-        "",
-      ].join("\n"),
+      ["pub fn value() -> i32 {", "    2", "}", ""].join("\n"),
     );
     await writeFile(
       join(repoPath, "apps/web/src/app.tsx"),
-      [
-        "export function App() {",
-        "  return <main>Hello mixed</main>;",
-        "}",
-        "",
-      ].join("\n"),
+      ["export function App() {", "  return <main>Hello mixed</main>;", "}", ""].join("\n"),
     );
     await writeFile(
       join(repoPath, "apps/web/src/index.html"),
-      ["<main>", "  <div id=\"app\"></div>", "</main>", ""].join("\n"),
+      ["<main>", '  <div id="app"></div>', "</main>", ""].join("\n"),
     );
     await git(repoPath, ["add", "."]);
     await git(repoPath, ["commit", "-m", "update mixed"], "2026-04-08T00:00:00Z");
@@ -323,14 +253,10 @@ test("mixed rust and node repository aggregates analyzer outputs into one result
     assert.ok(result.points.every((point) => point.moduleKey.includes(":")));
 
     const latestRustPoint = result.points.find(
-      (point) =>
-        point.moduleKey === "rust:crate:core" &&
-        point.ts === "2026-04-08T00:00:00+00:00",
+      (point) => point.moduleKey === "rust:crate:core" && point.ts === "2026-04-08T00:00:00+00:00",
     );
     const latestNodePoint = result.points.find(
-      (point) =>
-        point.moduleKey === "node:package:web" &&
-        point.ts === "2026-04-08T00:00:00+00:00",
+      (point) => point.moduleKey === "node:package:web" && point.ts === "2026-04-08T00:00:00+00:00",
     );
 
     assert.ok(latestRustPoint);
@@ -379,11 +305,7 @@ test("aggregate analyzer fails when snapshot timelines do not match", async () =
   );
 });
 
-async function git(
-  cwd: string,
-  args: string[],
-  authorDate?: string,
-) {
+async function git(cwd: string, args: string[], authorDate?: string) {
   await execFileAsync("git", args, {
     cwd,
     env: authorDate

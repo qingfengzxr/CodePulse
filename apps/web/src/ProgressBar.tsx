@@ -32,8 +32,7 @@ export function ProgressBar({ analysis }: ProgressBarProps) {
           {analysis.progress.phase} · {analysis.progress.percent.toFixed(1)}%
         </span>
         <span>
-          {analysis.progress.completedSnapshots}/{analysis.progress.sampledCommits || 0}{" "}
-          快照
+          {analysis.progress.completedSnapshots}/{analysis.progress.sampledCommits || 0} 快照
         </span>
       </div>
       <div className="progress-bar">
@@ -47,14 +46,11 @@ export function ProgressBar({ analysis }: ProgressBarProps) {
       <div className="progress-detail">
         <span>
           当前提交：
-          {analysis.progress.currentCommit
-            ? analysis.progress.currentCommit.slice(0, 8)
-            : "-"}
+          {analysis.progress.currentCommit ? analysis.progress.currentCommit.slice(0, 8) : "-"}
         </span>
         <span>当前模块：{analysis.progress.currentModule ?? "-"}</span>
         <span>
-          文件：{analysis.progress.processedFiles ?? 0}/
-          {analysis.progress.currentFiles ?? 0}
+          文件：{analysis.progress.processedFiles ?? 0}/{analysis.progress.currentFiles ?? 0}
         </span>
         <span>剩余时间：{formatRemainingTime(analysis.progress.etaSeconds)}</span>
       </div>

@@ -122,9 +122,7 @@ export function RepositoryModulesPage({
                   <div className="module-table-cell">
                     <code className="module-table-path">{module.rootPath}</code>
                   </div>
-                  <div className="module-table-cell module-table-number">
-                    {module.files.length}
-                  </div>
+                  <div className="module-table-cell module-table-number">{module.files.length}</div>
                   <div className="module-table-cell">
                     <span className="mono-badge">{module.source}</span>
                   </div>

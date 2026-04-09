@@ -497,14 +497,14 @@ test("api exposes mixed rust and node analysis results in one job", async () => 
     );
     assert.equal(finalAnalysis.statusCode, 200);
     assert.ok(
-      finalAnalysis.json().points.some((point: { moduleKey: string }) =>
-        point.moduleKey.startsWith("rust:crate:"),
-      ),
+      finalAnalysis
+        .json()
+        .points.some((point: { moduleKey: string }) => point.moduleKey.startsWith("rust:crate:")),
     );
     assert.ok(
-      finalAnalysis.json().points.some((point: { moduleKey: string }) =>
-        point.moduleKey.startsWith("node:package:"),
-      ),
+      finalAnalysis
+        .json()
+        .points.some((point: { moduleKey: string }) => point.moduleKey.startsWith("node:package:")),
     );
 
     const modulesResponse = await app.inject({
@@ -513,7 +513,10 @@ test("api exposes mixed rust and node analysis results in one job", async () => 
     });
     assert.equal(modulesResponse.statusCode, 200);
     assert.deepEqual(
-      modulesResponse.json().map((module: { key: string }) => module.key).sort(),
+      modulesResponse
+        .json()
+        .map((module: { key: string }) => module.key)
+        .sort(),
       ["node:package:web", "rust:crate:core"],
     );
 

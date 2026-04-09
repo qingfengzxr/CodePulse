@@ -1,9 +1,4 @@
-import type {
-  AnalysisProgress,
-  MetricPoint,
-  ModuleUnit,
-  Snapshot,
-} from "@code-dance/domain";
+import type { AnalysisProgress, MetricPoint, ModuleUnit, Snapshot } from "@code-dance/domain";
 import {
   detectRustModulesAtRevision,
   listCommits,
@@ -12,6 +7,7 @@ import {
 } from "@code-dance/git";
 import type { DiffStatRow } from "@code-dance/git";
 import { countModuleLocAtRevision } from "../shared/loc-counter.js";
+import { estimateSnapshotEtaSeconds } from "../shared/progress-estimate.js";
 import type {
   AnalyzeRepositoryHistoryInput,
   AnalyzeRepositoryHistoryOutput,
@@ -95,11 +91,7 @@ export async function analyzeRustHistory(
     const diffRows =
       previousCommit === null
         ? []
-        : await readNumstatBetweenRevisions(
-            input.localPath,
-            previousCommit.hash,
-            commit.hash,
-          );
+        : await readNumstatBetweenRevisions(input.localPath, previousCommit.hash, commit.hash);
     const totalWorkUnits = locFiles + diffRows.length;
 
     snapshots.push({
@@ -109,6 +101,7 @@ export async function analyzeRustHistory(
     });
 
     let processedWorkUnits = 0;
+    const currentSnapshotStartedAtMs = Date.now();
     const moduleNameByKey = new Map(modules.map((module) => [module.key, module.name]));
     const locByModule = await countModuleLocAtRevision({
       localPath: input.localPath,
@@ -126,6 +119,7 @@ export async function analyzeRustHistory(
           currentFiles: totalWorkUnits,
           processedFiles: processedWorkUnits,
           startedAtMs,
+          currentSnapshotStartedAtMs,
         });
       },
     });
@@ -169,6 +163,7 @@ export async function analyzeRustHistory(
           currentFiles: totalWorkUnits,
           processedFiles: processedWorkUnits,
           startedAtMs,
+          currentSnapshotStartedAtMs,
         });
       }
     }
@@ -178,7 +173,7 @@ export async function analyzeRustHistory(
       const diffMetric =
         previousCommit === null
           ? { added: loc, deleted: 0, churn: loc }
-          : diffMetricsByModule.get(module.key) ?? { added: 0, deleted: 0, churn: 0 };
+          : (diffMetricsByModule.get(module.key) ?? { added: 0, deleted: 0, churn: 0 });
 
       points.push({
         analysisId: input.analysisId,
@@ -228,6 +223,7 @@ export async function analyzeRustHistory(
       currentFiles: totalWorkUnits,
       processedFiles: totalWorkUnits,
       startedAtMs,
+      currentSnapshotStartedAtMs,
       forceCompletedSnapshots: snapshotIndex + 1,
     });
   }
@@ -319,31 +315,24 @@ async function publishSnapshotProgress(input: {
   currentFiles: number;
   processedFiles: number;
   startedAtMs: number;
+  currentSnapshotStartedAtMs: number;
   forceCompletedSnapshots?: number;
 }) {
   const completedSnapshots = input.forceCompletedSnapshots ?? input.snapshotIndex;
-  const snapshotFraction =
-    input.currentFiles > 0 ? input.processedFiles / input.currentFiles : 1;
+  const snapshotFraction = input.currentFiles > 0 ? input.processedFiles / input.currentFiles : 1;
   const totalFraction =
     (input.snapshotIndex + snapshotFraction) / Math.max(input.sampledCommits, 1);
   const percent = 10 + totalFraction * 85;
 
-  const elapsedSeconds = Math.max(
-    (Date.now() - input.startedAtMs) / 1000,
-    0.001,
-  );
-  const effectiveCompleted =
-    input.snapshotIndex + snapshotFraction > 0
-      ? input.snapshotIndex + snapshotFraction
-      : 0;
-  const averagePerSnapshotSeconds =
-    effectiveCompleted > 0 ? elapsedSeconds / effectiveCompleted : null;
-  const remainingSnapshots =
-    input.sampledCommits - (input.snapshotIndex + snapshotFraction);
-  const etaSeconds =
-    averagePerSnapshotSeconds !== null
-      ? Math.max(Math.ceil(averagePerSnapshotSeconds * remainingSnapshots), 0)
-      : null;
+  const etaSeconds = estimateSnapshotEtaSeconds({
+    sampledCommits: input.sampledCommits,
+    snapshotIndex: input.snapshotIndex,
+    currentFiles: input.currentFiles,
+    processedFiles: input.processedFiles,
+    startedAtMs: input.startedAtMs,
+    currentSnapshotStartedAtMs: input.currentSnapshotStartedAtMs,
+    forceCompletedSnapshots: input.forceCompletedSnapshots,
+  });
 
   await publishProgress(input.input, {
     phase: "analyzing-snapshots",
@@ -361,9 +350,6 @@ async function publishSnapshotProgress(input: {
   });
 }
 
-async function publishProgress(
-  input: AnalyzeRustHistoryInput,
-  progress: AnalysisProgress,
-) {
+async function publishProgress(input: AnalyzeRustHistoryInput, progress: AnalysisProgress) {
   await input.onProgress?.(progress);
 }
