@@ -12,7 +12,9 @@ type ChartTokens = {
   tooltipText: string;
   zoomBg: string;
   zoomText: string;
+  zoomHandle: string;
   pageIconInactive: string;
+  pageIconActive: string;
   emphasisText: string;
 };
 
@@ -26,7 +28,9 @@ const fallbackTokens: ChartTokens = {
   tooltipText: "#f8fafc",
   zoomBg: "rgba(255, 255, 255, 0.06)",
   zoomText: "rgba(244, 239, 228, 0.58)",
+  zoomHandle: "#fde68a",
   pageIconInactive: "rgba(244, 239, 228, 0.28)",
+  pageIconActive: "#fde68a",
   emphasisText: "rgba(244, 239, 228, 0.74)",
 };
 
@@ -55,10 +59,16 @@ export function getChartTokens(): ChartTokens {
     tooltipText: readThemeToken(styles, "--chart-tooltip-text", fallbackTokens.tooltipText),
     zoomBg: readThemeToken(styles, "--chart-zoom-bg", fallbackTokens.zoomBg),
     zoomText: readThemeToken(styles, "--chart-zoom-text", fallbackTokens.zoomText),
+    zoomHandle: readThemeToken(styles, "--chart-zoom-handle", fallbackTokens.zoomHandle),
     pageIconInactive: readThemeToken(
       styles,
       "--chart-page-icon-inactive",
       fallbackTokens.pageIconInactive,
+    ),
+    pageIconActive: readThemeToken(
+      styles,
+      "--chart-page-icon-active",
+      fallbackTokens.pageIconActive,
     ),
     emphasisText: readThemeToken(styles, "--chart-emphasis-text", fallbackTokens.emphasisText),
   };

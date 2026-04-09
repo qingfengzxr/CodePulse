@@ -2,9 +2,9 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import type {
-  AnalysisSamplingDto,
   AnalysisModuleSummaryDto,
   AnalysisResultDto,
+  AnalysisSamplingDto,
   AnalysisSummaryDto,
   CandlesResponseDto,
   DistributionResponseDto,
@@ -19,8 +19,8 @@ import {
   getTotalDistributionValue,
   type MetricKey,
 } from "./analysis-data";
-import { ModuleCandlestickChart } from "./charts/ModuleCandlestickChart";
 import { ModuleBumpChart } from "./charts/ModuleBumpChart";
+import { ModuleCandlestickChart } from "./charts/ModuleCandlestickChart";
 import { ModuleChurnHeatmapChart } from "./charts/ModuleChurnHeatmapChart";
 import { ModuleRankingChart } from "./charts/ModuleRankingChart";
 import { ModuleShareStackedAreaChart } from "./charts/ModuleShareStackedAreaChart";
@@ -53,74 +53,17 @@ type AnalysisDetailQueryState = {
   distributionsByMetric: Partial<Record<MetricKey, DistributionResponseDto>>;
 };
 
-const metrics: MetricKey[] = ["loc", "added", "deleted", "churn"];
-
-type ChartFrameProps = {
-  title: string;
-  description: string;
-  badges?: string[];
-  footer?: string;
-  actions?: string[];
-  wide?: boolean;
-  children: React.ReactNode;
-};
-
 type ChartCard = {
   id: string;
+  tabLabel: string;
+  category: string;
   title: string;
   description: string;
-  badges?: string[];
-  footer?: string;
-  actions?: string[];
-  wide?: boolean;
+  summary: string[];
   content: ReactNode;
 };
 
-function ChartFrame({
-  title,
-  description,
-  badges = [],
-  footer,
-  actions = [],
-  wide = false,
-  children,
-}: ChartFrameProps) {
-  return (
-    <article className={`chart-showcase-card ${wide ? "chart-showcase-card-wide" : ""}`}>
-      <div className="chart-showcase-head">
-        <div>
-          <p className="panel-kicker">Chart Note</p>
-          <h3>{title}</h3>
-          <p className="section-copy">{description}</p>
-        </div>
-        {badges.length > 0 ? (
-          <div className="chart-showcase-badges">
-            {badges.map((badge) => (
-              <span className="stat-chip" key={badge}>
-                {badge}
-              </span>
-            ))}
-          </div>
-        ) : null}
-      </div>
-
-      <div className="chart-showcase-body">{children}</div>
-
-      {footer || actions.length > 0 ? (
-        <div className="chart-showcase-footer">
-          <p>{footer}</p>
-          <div className="chart-showcase-actions">
-            {actions.map((action) => (
-              <span className="ghost-chip" key={action}>
-                {action}
-              </span>
-            ))}
-          </div>
-        </div>
-      ) : null}
-    </article>
-  );
-}
+const metrics: MetricKey[] = ["loc", "added", "deleted", "churn"];
 
 export function AnalysisDetailPage({
   analyses,
@@ -139,6 +82,7 @@ export function AnalysisDetailPage({
   const [samplingActionLoading, setSamplingActionLoading] = useState<AnalysisSamplingDto | null>(
     null,
   );
+  const currentAnalysisId = analysisId ?? "";
 
   useEffect(() => {
     if (!analysis && analysisId) {
@@ -158,21 +102,18 @@ export function AnalysisDetailPage({
       setQueryError(null);
 
       try {
-        const moduleQuery = new URLSearchParams({ analysisId: analysisId! });
+        const moduleQuery = new URLSearchParams({ analysisId: currentAnalysisId });
         const moduleResponse = fetch(`/api/modules?${moduleQuery.toString()}`);
         const seriesResponses = metrics.map((metric) =>
           fetch(
-            `/api/series?${new URLSearchParams({
-              analysisId: analysisId!,
-              metric,
-            }).toString()}`,
+            `/api/series?${new URLSearchParams({ analysisId: currentAnalysisId, metric }).toString()}`,
           ),
         );
         const candlesResponse = fetch(`/api/candles?${moduleQuery.toString()}`);
         const distributionResponses = metrics.map((metric) =>
           fetch(
             `/api/distribution?${new URLSearchParams({
-              analysisId: analysisId!,
+              analysisId: currentAnalysisId,
               metric,
               snapshot: "latest",
             }).toString()}`,
@@ -240,26 +181,17 @@ export function AnalysisDetailPage({
     return () => {
       cancelled = true;
     };
-  }, [analysis?.job.id, analysis?.job.status, analysisId]);
+  }, [analysis, currentAnalysisId, analysisId]);
 
   const currentAnalysis = analysis ?? null;
-  const currentAnalysisId = analysisId ?? null;
   const repository = currentAnalysis
     ? repositories.find((candidate) => candidate.id === currentAnalysis.job.repositoryId)
     : undefined;
   const locSeries = queryState?.seriesByMetric.loc;
-  const latestSnapshot = locSeries ? getLatestSnapshotFromSeries(locSeries) : null;
-  const siblingAnalysesBySampling = repository
-    ? samplingOptions.map((sampling) => ({
-        sampling,
-        analysis: Object.values(analysisSummaries).find(
-          (summary) =>
-            summary?.job.repositoryId === repository.id && summary.job.sampling === sampling,
-        ),
-      }))
-    : [];
   const totalLocSeries = locSeries ? buildTotalLocSeriesFromQuery(locSeries) : null;
   const totalLoc = totalLocSeries?.values.at(-1) ?? 0;
+  const peakLoc = totalLocSeries?.values.reduce((peak, value) => Math.max(peak, value), 0) ?? 0;
+  const latestSnapshot = locSeries ? getLatestSnapshotFromSeries(locSeries) : null;
   const moduleCount = queryState?.modules.length ?? 0;
   const totalAdded = queryState?.distributionsByMetric.added
     ? getTotalDistributionValue(queryState.distributionsByMetric.added)
@@ -271,8 +203,15 @@ export function AnalysisDetailPage({
     ? getTotalDistributionValue(queryState.distributionsByMetric.churn)
     : 0;
   const topModule = locSeries ? buildMetricSeriesFromQuery(locSeries).modules[0] : null;
-
-  const peakLoc = totalLocSeries?.values.reduce((peak, value) => Math.max(peak, value), 0) ?? 0;
+  const siblingAnalysesBySampling = repository
+    ? samplingOptions.map((sampling) => ({
+        sampling,
+        analysis: Object.values(analysisSummaries).find(
+          (summary) =>
+            summary?.job.repositoryId === repository.id && summary.job.sampling === sampling,
+        ),
+      }))
+    : [];
 
   const chartCards = useMemo<ChartCard[]>(() => {
     const cards: ChartCard[] = [];
@@ -280,44 +219,41 @@ export function AnalysisDetailPage({
     if (locSeries && currentAnalysis) {
       cards.push({
         id: "repo-scale",
+        tabLabel: "总览趋势",
+        category: "总览",
         title: "仓库总 LOC 趋势",
-        description: "回答“整体规模如何变化”，只看仓库总量，不在这张图里叠加模块细节。",
-        badges: [`当前 ${formatMetricValue(totalLoc)}`, `峰值 ${formatMetricValue(peakLoc)}`],
-        footer: "适合作为第一张主图，用来建立对仓库长期增长和阶段性跳变的整体感知。",
-        actions: ["时间缩放", "悬浮提示", "总量视角"],
-        wide: true,
+        description: "先只看整体规模，建立对长期增长和阶段跳变的直觉。",
+        summary: [`当前 ${formatMetricValue(totalLoc)}`, `峰值 ${formatMetricValue(peakLoc)}`],
         content: <RepositoryScaleChart series={locSeries} />,
       });
 
       cards.push({
         id: "stacked-area",
+        tabLabel: "结构变化",
+        category: "结构",
         title: "模块堆叠面积图",
-        description: "回答“当前结构由谁构成、份额如何变化”，重点是模块占比和结构迁移。",
-        badges: [`${locSeries.series.length} 个模块`, `${locSeries.timeline.length} 个采样点`],
-        footer: "先看面积图，再去趋势图和排行图钻取具体模块，是最自然的阅读路径。",
-        actions: ["长尾折叠", "模块聚合", "结构对比"],
-        wide: true,
+        description: "看谁构成了当前结构，以及结构随时间如何迁移。",
+        summary: [`${locSeries.series.length} 个模块`, `${locSeries.timeline.length} 个采样点`],
         content: <ModuleStackedAreaChart series={locSeries} />,
       });
 
       cards.push({
         id: "share-stacked-area",
+        tabLabel: "占比结构",
+        category: "结构",
         title: "模块占比 100% 堆叠面积图",
-        description: "回答“谁正在吞噬份额、结构迁移有多快”，把绝对 LOC 变化折叠成百分比结构变化。",
-        badges: ["结构视角", "100% 归一化", `${locSeries.series.length} 个模块`],
-        footer: "当你只关心份额变化而不是总量扩张时，这张图比普通堆叠面积图更有效。",
-        actions: ["份额迁移", "Top N", "结构对比"],
-        wide: true,
+        description: "忽略绝对规模，只关注结构份额是如何变化的。",
+        summary: ["100% 归一化", `${locSeries.series.length} 个模块`],
         content: <ModuleShareStackedAreaChart series={locSeries} />,
       });
 
       cards.push({
         id: "ranking",
+        tabLabel: "当前排行",
+        category: "排行",
         title: "当前模块排行",
-        description: "回答“此刻谁最大、谁最活跃”，把当前时间点的模块规模或变更量直接排出来。",
-        badges: [`Top 模块 ${topModule?.name ?? "-"}`],
-        footer: "这张图最适合做入口：先定位重点模块，再进入模块趋势图查看长期演化。",
-        actions: ["切换指标", "Top N", "当前快照"],
+        description: "在当前时间点看谁最大、谁最活跃，适合作为深入分析入口。",
+        summary: [`Top 模块 ${topModule?.name ?? "-"}`],
         content: <ModuleRankingChart analysisId={currentAnalysis.job.id} />,
       });
     }
@@ -325,17 +261,11 @@ export function AnalysisDetailPage({
     if (queryState?.seriesByMetric.churn) {
       cards.push({
         id: "churn-heatmap",
+        tabLabel: "热点扫描",
+        category: "波动",
         title: "Churn 热力图",
-        description:
-          "回答“哪个阶段最动荡、热点从哪里迁移到哪里”，适合先扫时间热点，再深入具体模块。",
-        badges: [
-          "时间 x 模块",
-          "颜色代表 churn",
-          `${queryState.seriesByMetric.churn.series.length} 个模块`,
-        ],
-        footer: "热力图不擅长精确读值，但极适合发现重构窗口和高频活跃模块。",
-        actions: ["热点扫描", "阶段定位", "模块迁移"],
-        wide: true,
+        description: "扫描哪个阶段最动荡、热点迁移到了哪些模块。",
+        summary: [`${queryState.seriesByMetric.churn.series.length} 个模块`, "时间 x 模块"],
         content: <ModuleChurnHeatmapChart series={queryState.seriesByMetric.churn} />,
       });
     }
@@ -343,14 +273,11 @@ export function AnalysisDetailPage({
     if (queryState?.candles) {
       cards.push({
         id: "candlestick",
+        tabLabel: "阶段波动",
+        category: "波动",
         title: "模块 K 线图",
-        description:
-          "回答“一个模块在每个采样桶里如何开盘、收盘、冲到多高、探到多低”，适合看阶段内真实波动。",
-        badges: [`候选 ${queryState.modules.length} 个模块`, `当前 ${topModule?.name ?? "-"}`],
-        footer:
-          "这张图现在使用真实 OHLC：每个采样桶都会遍历 bucket 内 commit 级 LOC 路径，再汇总出开高低收。",
-        actions: ["模块切换", "OHLC", "时间窗口"],
-        wide: true,
+        description: "聚焦单模块在每个采样桶内的开高低收，适合看真实波动。",
+        summary: [`候选 ${queryState.modules.length} 个模块`, `当前 ${topModule?.name ?? "-"}`],
         content: <ModuleCandlestickChart candles={queryState.candles} />,
       });
     }
@@ -358,12 +285,11 @@ export function AnalysisDetailPage({
     if (queryState?.seriesByMetric.loc) {
       cards.push({
         id: "bump-chart",
+        tabLabel: "地位变化",
+        category: "趋势",
         title: "Top N 模块 Bump Chart",
-        description: "回答“谁在上升、谁在掉队”，把时间序列翻译成排名轨迹，更适合讲地位变化。",
-        badges: ["排名视角", "Top N", "loc / churn"],
-        footer: "当你关心模块地位而不是绝对数值时，Bump Chart 的表达会比折线图更直接。",
-        actions: ["排名轨迹", "Top N", "loc / churn"],
-        wide: true,
+        description: "把变化理解成排名轨迹，更容易判断谁在上升、谁在掉队。",
+        summary: ["排名视角", "Top N"],
         content: <ModuleBumpChart seriesByMetric={queryState.seriesByMetric} />,
       });
     }
@@ -371,12 +297,11 @@ export function AnalysisDetailPage({
     if (queryState && currentAnalysis) {
       cards.push({
         id: "trend",
+        tabLabel: "趋势对比",
+        category: "趋势",
         title: "模块趋势图",
-        description: "回答“某些核心模块分别怎么变”，用于做多模块之间的趋势对比和阶段性对照。",
-        badges: ["loc / added / deleted / churn", `${moduleCount} 个模块`],
-        footer: "这是最适合深挖模块行为的一张图，建议和排行图、K 线图配合使用。",
-        actions: ["指标切换", "搜索模块", "图例筛选", "时间缩放"],
-        wide: true,
+        description: "对少量核心模块做长期对比，适合做具体问题的深入排查。",
+        summary: [`${moduleCount} 个模块`, "loc / added / deleted / churn"],
         content: (
           <ModuleTrendChart
             analysisId={currentAnalysis.job.id}
@@ -398,42 +323,45 @@ export function AnalysisDetailPage({
   ]);
 
   useEffect(() => {
-    setActiveChartIndex((current) => {
-      if (chartCards.length === 0) {
-        return 0;
-      }
-
-      return Math.min(current, chartCards.length - 1);
-    });
+    setActiveChartIndex((current) => Math.min(current, Math.max(chartCards.length - 1, 0)));
   }, [chartCards.length]);
 
   if (!analysisId) {
     return (
-      <main className="layout">
-        <section className="panel">
-          <p className="feedback error">分析任务 ID 缺失。</p>
+      <main className="page-grid">
+        <section className="surface-section">
+          <div className="empty-state">
+            <strong>分析任务 ID 缺失</strong>
+            <p>当前无法定位具体分析结果。</p>
+          </div>
         </section>
       </main>
     );
   }
 
-  if (!analysis || !currentAnalysis || !currentAnalysisId) {
+  if (!analysis || !currentAnalysis) {
     return (
-      <main className="layout">
-        <section className="panel">
-          <div className="detail-header">
-            <Link className="ghost-button detail-link-button" to="/">
-              返回仓库列表
+      <main className="page-grid">
+        <section className="surface-section">
+          <div className="section-heading section-heading-inline">
+            <div>
+              <p className="section-kicker">Analysis</p>
+              <h2>正在加载分析详情</h2>
+            </div>
+            <Link className="secondary-button" to="/">
+              返回工作台
             </Link>
           </div>
-          <p className="feedback">正在加载分析详情...</p>
+          <div className="empty-state">
+            <strong>分析详情加载中</strong>
+            <p>正在读取任务结果与关联查询数据。</p>
+          </div>
         </section>
       </main>
     );
   }
 
   const loadedAnalysis = currentAnalysis;
-  const loadedAnalysisId = currentAnalysisId;
 
   async function handleRefresh() {
     await onRefreshAnalysis(loadedAnalysis.job.id);
@@ -458,117 +386,124 @@ export function AnalysisDetailPage({
     }
   }
 
+  const activeChart = chartCards[activeChartIndex] ?? null;
+
   return (
-    <main className="layout">
-      <section className="panel detail-hero">
-        <div className="detail-header">
+    <main className="page-grid">
+      <section className="surface-section detail-summary-section">
+        <div className="section-heading section-heading-inline">
           <div>
-            <p className="panel-kicker">Analysis Detail</p>
-            <h1 className="detail-title">{repository?.name ?? loadedAnalysis.job.repositoryId}</h1>
-            <p className="hero-copy">
-              当前按 {getSamplingLabel(loadedAnalysis.job.sampling)}{" "}
-              采样展示仓库演化趋势，图表仍完全基于现有查询接口加载。
+            <p className="section-kicker">Analysis</p>
+            <h2>{repository?.name ?? currentAnalysis.job.repositoryId}</h2>
+            <p className="section-description">
+              当前按 {getSamplingLabel(currentAnalysis.job.sampling)} 采样查看仓库演化结果，先看摘要，再进入单图分析。
             </p>
-            <div className="hero-filter detail-sampling-switch">
-              {siblingAnalysesBySampling.map(({ sampling, analysis }) =>
-                analysis ? (
-                  <Link
-                    className={`hero-filter-button ${loadedAnalysis.job.sampling === sampling ? "active" : ""}`}
-                    key={sampling}
-                    to={`/analyses/${analysis.job.id}`}
-                  >
-                    {getSamplingLabel(sampling)}
-                  </Link>
-                ) : (
-                  <button
-                    className={`hero-filter-button detail-sampling-missing ${loadedAnalysis.job.sampling === sampling ? "active" : ""}`}
-                    key={sampling}
-                    onClick={() => void handleCreateSampling(sampling)}
-                    type="button"
-                  >
-                    {samplingActionLoading === sampling
-                      ? `${getSamplingLabel(sampling)}...`
-                      : getSamplingLabel(sampling)}
-                  </button>
-                ),
-              )}
-            </div>
-            <div className="detail-meta-strip">
-              <span className="mono-badge">
-                {repository?.defaultBranch ?? loadedAnalysis.job.branch}
-              </span>
-              <span className="mono-badge">{loadedAnalysis.job.status}</span>
-              <span className="mono-badge">{getSamplingLabel(loadedAnalysis.job.sampling)}</span>
-              <span className="mono-badge">{loadedAnalysis.snapshots.length} 个采样点</span>
-            </div>
           </div>
-          <div className="detail-actions">
-            <Link className="ghost-button detail-link-button" to="/">
+          <div className="detail-action-row">
+            <Link className="secondary-button" to="/">
               返回工作台
             </Link>
-            <button className="ghost-button" onClick={() => void handleRefresh()} type="button">
+            <button className="secondary-button" onClick={() => void handleRefresh()} type="button">
               刷新任务
             </button>
           </div>
         </div>
 
-        <div className="overview-stats">
-          <div className="overview-stat-card">
+        <div className="detail-toolbar">
+          <div className="segmented-control">
+            {siblingAnalysesBySampling.map(({ sampling, analysis: sibling }) =>
+              sibling ? (
+                <Link
+                  className={`segmented-option ${currentAnalysis.job.sampling === sampling ? "active" : ""}`}
+                  key={sampling}
+                  to={`/analyses/${sibling.job.id}`}
+                >
+                  {getSamplingLabel(sampling)}
+                </Link>
+              ) : (
+                <button
+                  className={`segmented-option ${currentAnalysis.job.sampling === sampling ? "active" : ""}`}
+                  key={sampling}
+                  onClick={() => void handleCreateSampling(sampling)}
+                  type="button"
+                >
+                  {samplingActionLoading === sampling
+                    ? `${getSamplingLabel(sampling)}...`
+                    : getSamplingLabel(sampling)}
+                </button>
+              ),
+            )}
+          </div>
+
+          <div className="meta-chip-row">
+            <span className="meta-chip">
+              分支 {repository?.defaultBranch ?? currentAnalysis.job.branch}
+            </span>
+              <span className="meta-chip">状态 {loadedAnalysis.job.status}</span>
+              <span className="meta-chip">{loadedAnalysis.snapshots.length} 个采样点</span>
+          </div>
+        </div>
+
+        <div className="summary-grid detail-summary-grid">
+          <article className="summary-card">
             <span>当前总 LOC</span>
             <strong>{formatMetricValue(totalLoc)}</strong>
-          </div>
-          <div className="overview-stat-card">
+            <p>当前时间点的仓库整体规模。</p>
+          </article>
+          <article className="summary-card">
             <span>模块数</span>
             <strong>{formatMetricValue(moduleCount)}</strong>
-          </div>
-          <div className="overview-stat-card">
+            <p>当前分析对应的模块数量。</p>
+          </article>
+          <article className="summary-card">
             <span>最新采样</span>
             <strong>{latestSnapshot?.ts.slice(0, 10) ?? "-"}</strong>
-          </div>
-          <div className="overview-stat-card">
-            <span>最大模块</span>
+            <p>最近一次采样时间。</p>
+          </article>
+          <article className="summary-card">
+            <span>关键模块</span>
             <strong>{topModule?.name ?? "-"}</strong>
-          </div>
-          <div className="overview-stat-card">
+            <p>按当前总量排序的最大模块。</p>
+          </article>
+          <article className="summary-card">
             <span>新增 / 删除 / Churn</span>
             <strong>
               {formatMetricValue(totalAdded)} / {formatMetricValue(totalDeleted)} /{" "}
               {formatMetricValue(totalChurn)}
             </strong>
-          </div>
+            <p>基于最新分布查询得到的变更规模。</p>
+          </article>
         </div>
 
         {loadedAnalysis.job.status === "pending" || loadedAnalysis.job.status === "running" ? (
           <ProgressBar analysis={loadedAnalysis} />
         ) : null}
-        {queryLoading ? <p className="feedback">正在加载查询接口数据...</p> : null}
+        {queryLoading ? <p className="feedback">正在加载图表查询数据...</p> : null}
         {queryError ? <p className="feedback error">{queryError}</p> : null}
       </section>
 
-      {chartCards.length > 0 ? (
-        <section className="panel">
-          <div className="panel-header">
+      {activeChart ? (
+        <section className="surface-section analysis-stage">
+          <div className="section-heading section-heading-inline">
             <div>
-              <p className="panel-kicker">Chart Gallery</p>
-              <h2>图表分析区</h2>
-              <p className="section-copy">
-                一次只展示一张图表卡，通过左右切换聚焦当前视图，避免整页下拉式堆叠。
-              </p>
+              <p className="section-kicker">Charts</p>
+              <h2>单图聚焦分析</h2>
+              <p className="section-description">一次只看一张主图，把注意力集中在当前问题上。</p>
             </div>
-            <div className="chart-gallery-controls">
+            <div className="analysis-stage-nav">
               <button
-                className="ghost-button"
+                className="secondary-button"
                 disabled={activeChartIndex <= 0}
                 onClick={() => setActiveChartIndex((current) => Math.max(0, current - 1))}
                 type="button"
               >
                 上一张
               </button>
-              <span className="stat-chip">
+              <span className="meta-chip">
                 {activeChartIndex + 1} / {chartCards.length}
               </span>
               <button
-                className="ghost-button"
+                className="secondary-button"
                 disabled={activeChartIndex >= chartCards.length - 1}
                 onClick={() =>
                   setActiveChartIndex((current) => Math.min(chartCards.length - 1, current + 1))
@@ -580,7 +515,7 @@ export function AnalysisDetailPage({
             </div>
           </div>
 
-          <div className="chart-gallery-tabs">
+          <div className="chart-tab-strip">
             {chartCards.map((card, index) => (
               <button
                 aria-pressed={index === activeChartIndex}
@@ -589,21 +524,29 @@ export function AnalysisDetailPage({
                 onClick={() => setActiveChartIndex(index)}
                 type="button"
               >
-                {card.title}
+                {card.tabLabel}
               </button>
             ))}
           </div>
 
-          <ChartFrame
-            actions={chartCards[activeChartIndex]?.actions}
-            badges={chartCards[activeChartIndex]?.badges}
-            description={chartCards[activeChartIndex]?.description ?? ""}
-            footer={chartCards[activeChartIndex]?.footer}
-            title={chartCards[activeChartIndex]?.title ?? ""}
-            wide
-          >
-            {chartCards[activeChartIndex]?.content}
-          </ChartFrame>
+          <article className="analysis-focus-card">
+            <div className="analysis-focus-head">
+              <div>
+                <p className="section-kicker">{activeChart.category}</p>
+                <h3>{activeChart.title}</h3>
+                <p className="section-description">{activeChart.description}</p>
+              </div>
+              <div className="meta-chip-row">
+                {activeChart.summary.map((item) => (
+                  <span className="meta-chip" key={item}>
+                    {item}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div className="analysis-focus-body">{activeChart.content}</div>
+          </article>
         </section>
       ) : null}
     </main>

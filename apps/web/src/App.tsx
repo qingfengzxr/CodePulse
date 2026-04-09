@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { Link, Route, Routes, useLocation } from "react-router-dom";
 
 import type {
@@ -13,12 +13,17 @@ import type {
 import { AnalysisDetailPage } from "./AnalysisDetailPage";
 import { RepositoryModulesPage } from "./RepositoryModulesPage";
 import { RepositoryListPage } from "./RepositoryListPage";
-import { getSamplingLabel } from "./sampling";
 import { ThemeProvider, type ThemeMode } from "./theme";
 
 type ApiError = {
   error: string;
   message: string;
+};
+
+type ShellCopy = {
+  eyebrow: string;
+  title: string;
+  description: string;
 };
 
 const THEME_STORAGE_KEY = "code-dance-theme";
@@ -46,10 +51,6 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    void loadWorkspace();
-  }, []);
-
-  useEffect(() => {
     document.documentElement.dataset.theme = themeMode;
     document.documentElement.style.colorScheme = themeMode;
     window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
@@ -73,7 +74,7 @@ export function App() {
     return () => window.clearInterval(timer);
   }, [analysisSummaries]);
 
-  async function loadWorkspace() {
+  const loadWorkspace = useCallback(async () => {
     setLoading(true);
     setError(null);
 
@@ -103,9 +104,9 @@ export function App() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
-  async function loadModules(repositoryId: string) {
+  const loadModules = useCallback(async (repositoryId: string) => {
     setModuleLoading((current) => ({ ...current, [repositoryId]: true }));
     setError(null);
 
@@ -126,7 +127,7 @@ export function App() {
     } finally {
       setModuleLoading((current) => ({ ...current, [repositoryId]: false }));
     }
-  }
+  }, []);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -161,7 +162,7 @@ export function App() {
     }
   }
 
-  async function refreshAnalysis(analysisId: string) {
+  const refreshAnalysis = useCallback(async (analysisId: string) => {
     try {
       const response = await fetch(`/api/analyses/${analysisId}`);
       if (!response.ok) {
@@ -180,12 +181,13 @@ export function App() {
     } catch {
       // Keep the latest known result on transient polling errors.
     }
-  }
+  }, []);
 
-  async function runAnalysis(
-    repository: RepositoryTargetDto,
-    sampling = selectedSamplingByRepository[repository.id] ?? "weekly",
-  ): Promise<AnalysisResultDto | null> {
+  const runAnalysis = useCallback(
+    async (
+      repository: RepositoryTargetDto,
+      sampling = selectedSamplingByRepository[repository.id] ?? "weekly",
+    ): Promise<AnalysisResultDto | null> => {
     const loadingKey = `${repository.id}:${sampling}`;
     setAnalysisLoading((current) => ({ ...current, [loadingKey]: true }));
     setError(null);
@@ -226,9 +228,11 @@ export function App() {
     } finally {
       setAnalysisLoading((current) => ({ ...current, [loadingKey]: false }));
     }
-  }
+    },
+    [selectedSamplingByRepository],
+  );
 
-  async function deleteRepository(repository: RepositoryTargetDto) {
+  const deleteRepository = useCallback(async (repository: RepositoryTargetDto) => {
     const confirmed = window.confirm(
       `确认删除仓库“${repository.name}”吗？这会同时删除关联的分析结果。`,
     );
@@ -291,7 +295,11 @@ export function App() {
     } finally {
       setDeleteLoading((current) => ({ ...current, [repository.id]: false }));
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    void loadWorkspace();
+  }, [loadWorkspace]);
 
   const latestAnalysesByRepositoryAndSampling = Object.values(analysisSummaries).reduce<
     Record<string, AnalysisSummaryDto>
@@ -312,137 +320,147 @@ export function App() {
     }));
   }
 
+  const activeAnalyses = useMemo(
+    () =>
+      Object.values(analysisSummaries).filter(
+        (analysis) => analysis.job.status === "pending" || analysis.job.status === "running",
+      ).length,
+    [analysisSummaries],
+  );
+  const readyRepositories = useMemo(
+    () => repositories.filter((repository) => repository.status === "ready").length,
+    [repositories],
+  );
+  const shellCopy = getShellCopy(location.pathname);
+
   return (
     <ThemeProvider theme={themeMode}>
       <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand-block">
-          <div className="brand-mark">CD</div>
-          <div className="brand-copy">
-            <strong>CODE DANCE</strong>
-            <span>Repo evolution workbench</span>
-          </div>
-        </div>
-
-        <nav className="sidebar-nav">
-          <Link
-            className={`sidebar-link ${location.pathname === "/" || location.pathname.startsWith("/repositories/") ? "active" : ""}`}
-            to="/"
-          >
-            <span className="sidebar-link-icon">01</span>
-            <span className="sidebar-link-copy">
-              <strong>工作台</strong>
-              <small>仓库与分析任务</small>
-            </span>
-          </Link>
-
-          <div
-            className={`sidebar-link ${location.pathname.startsWith("/analyses/") ? "active" : ""}`}
-          >
-            <span className="sidebar-link-icon">02</span>
-            <span className="sidebar-link-copy">
-              <strong>分析结果</strong>
-              <small>图表与历史趋势</small>
-            </span>
+        <aside className="shell-sidebar">
+          <div className="brand-block">
+            <div className="brand-mark">CD</div>
+            <div className="brand-copy">
+              <strong>Code Dance</strong>
+              <span>仓库演化分析工作区</span>
+            </div>
           </div>
 
-          <div className="sidebar-link disabled">
-            <span className="sidebar-link-icon">03</span>
-            <span className="sidebar-link-copy">
-              <strong>归档区</strong>
-              <small>后续预留</small>
-            </span>
-          </div>
-        </nav>
-
-        <div className="sidebar-footer">
-          <span className="mono-badge">v0.1.0-alpha</span>
-          <p>Rust 优先的本地仓库演化分析工具</p>
-        </div>
-      </aside>
-
-      <div className="shell-main">
-        <header className="topbar">
-          <div className="command-bar">
-            <span className="command-icon">/</span>
-            <input
-              aria-label="Search"
-              className="command-input"
-              disabled
-              placeholder="搜索仓库、模块或分析记录"
-              type="text"
-            />
-            <span className="command-hint">⌘K</span>
-          </div>
-
-          <div className="topbar-meta">
-            <button
-              aria-label={`切换到${themeMode === "dark" ? "亮色" : "暗色"}主题`}
-              className="ghost-button theme-toggle"
-              onClick={() => setThemeMode((current) => (current === "dark" ? "light" : "dark"))}
-              type="button"
+          <nav className="sidebar-nav">
+            <Link
+              className={`sidebar-link ${location.pathname === "/" ? "active" : ""}`}
+              to="/"
             >
-              <span className="theme-toggle-mark">{themeMode === "dark" ? "LIGHT" : "DARK"}</span>
-              <span>{themeMode === "dark" ? "切换亮色" : "切换暗色"}</span>
-            </button>
-            <span className="mono-badge">{repositories.length} 仓库</span>
-            <span className="mono-badge">{Object.keys(analysisSummaries).length} 分析</span>
-          </div>
-        </header>
+              <span className="sidebar-link-index">01</span>
+              <span className="sidebar-link-copy">
+                <strong>工作台</strong>
+                <small>仓库接入、任务运行、结果入口</small>
+              </span>
+            </Link>
 
-        <div className="page-shell">
-          <Routes>
-            <Route
-              element={
-                <RepositoryListPage
-                  analysesByRepositoryAndSampling={latestAnalysesByRepositoryAndSampling}
-                  analysisLoading={analysisLoading}
-                  deleteLoading={deleteLoading}
-                  error={error}
-                  loading={loading}
-                  localPath={localPath}
-                  moduleLoading={moduleLoading}
-                  moduleResults={moduleResults}
-                  onLoadModules={loadModules}
-                  onDeleteRepository={deleteRepository}
-                  onRefreshWorkspace={loadWorkspace}
-                  onRunAnalysis={runAnalysis}
-                  onSubmit={handleSubmit}
-                  onUpdateSampling={updateRepositorySampling}
-                  onUpdateLocalPath={setLocalPath}
-                  repositories={repositories}
-                  selectedSamplingByRepository={selectedSamplingByRepository}
-                  submitting={submitting}
-                />
-              }
-              path="/"
-            />
-            <Route
-              element={
-                <AnalysisDetailPage
-                  analyses={analysisDetails}
-                  analysisSummaries={analysisSummaries}
-                  onRefreshAnalysis={refreshAnalysis}
-                  onRunAnalysis={runAnalysis}
-                  repositories={repositories}
-                />
-              }
-              path="/analyses/:analysisId"
-            />
-            <Route
-              element={
-                <RepositoryModulesPage
-                  moduleLoading={moduleLoading}
-                  moduleResults={moduleResults}
-                  onLoadModules={loadModules}
-                  repositories={repositories}
-                />
-              }
-              path="/repositories/:repositoryId/modules"
-            />
-          </Routes>
+            <div className={`sidebar-link ${location.pathname.startsWith("/analyses/") ? "active" : ""}`}>
+              <span className="sidebar-link-index">02</span>
+              <span className="sidebar-link-copy">
+                <strong>分析详情</strong>
+                <small>聚焦单张主图，按节奏阅读结果</small>
+              </span>
+            </div>
+
+            <div
+              className={`sidebar-link ${location.pathname.startsWith("/repositories/") ? "active" : ""}`}
+            >
+              <span className="sidebar-link-index">03</span>
+              <span className="sidebar-link-copy">
+                <strong>模块清单</strong>
+                <small>补充查看仓库的技术模块结构</small>
+              </span>
+            </div>
+          </nav>
+
+          <div className="sidebar-footer">
+            <span className="mono-badge">v0.1.0-alpha</span>
+            <p>保留现有分析接口，重做前端体验。</p>
+          </div>
+        </aside>
+
+        <div className="shell-main">
+          <header className="shell-header">
+            <div className="shell-header-copy">
+              <p className="page-kicker">{shellCopy.eyebrow}</p>
+              <h1>{shellCopy.title}</h1>
+              <p>{shellCopy.description}</p>
+            </div>
+
+            <div className="shell-header-meta">
+              <div className="shell-meta-cluster">
+                <span className="meta-chip">仓库 {repositories.length}</span>
+                <span className="meta-chip">运行中 {activeAnalyses}</span>
+                <span className="meta-chip">可分析 {readyRepositories}</span>
+              </div>
+              <button
+                aria-label={`切换到${themeMode === "dark" ? "亮色" : "暗色"}主题`}
+                className="secondary-button theme-toggle"
+                onClick={() => setThemeMode((current) => (current === "dark" ? "light" : "dark"))}
+                type="button"
+              >
+                <span className="theme-toggle-mark">{themeMode === "dark" ? "Light" : "Dark"}</span>
+                <span>{themeMode === "dark" ? "切换亮色" : "切换暗色"}</span>
+              </button>
+            </div>
+          </header>
+
+          <div className="page-shell">
+            <Routes>
+              <Route
+                element={
+                  <RepositoryListPage
+                    analysesByRepositoryAndSampling={latestAnalysesByRepositoryAndSampling}
+                    analysisLoading={analysisLoading}
+                    deleteLoading={deleteLoading}
+                    error={error}
+                    loading={loading}
+                    localPath={localPath}
+                    moduleLoading={moduleLoading}
+                    moduleResults={moduleResults}
+                    onDeleteRepository={deleteRepository}
+                    onLoadModules={loadModules}
+                    onRefreshWorkspace={loadWorkspace}
+                    onRunAnalysis={runAnalysis}
+                    onSubmit={handleSubmit}
+                    onUpdateLocalPath={setLocalPath}
+                    onUpdateSampling={updateRepositorySampling}
+                    repositories={repositories}
+                    selectedSamplingByRepository={selectedSamplingByRepository}
+                    submitting={submitting}
+                  />
+                }
+                path="/"
+              />
+              <Route
+                element={
+                  <AnalysisDetailPage
+                    analyses={analysisDetails}
+                    analysisSummaries={analysisSummaries}
+                    onRefreshAnalysis={refreshAnalysis}
+                    onRunAnalysis={runAnalysis}
+                    repositories={repositories}
+                  />
+                }
+                path="/analyses/:analysisId"
+              />
+              <Route
+                element={
+                  <RepositoryModulesPage
+                    moduleLoading={moduleLoading}
+                    moduleResults={moduleResults}
+                    onLoadModules={loadModules}
+                    repositories={repositories}
+                  />
+                }
+                path="/repositories/:repositoryId/modules"
+              />
+            </Routes>
+          </div>
         </div>
-      </div>
       </div>
     </ThemeProvider>
   );
@@ -475,5 +493,29 @@ function summarizeAnalysis(analysis: AnalysisResultDto): AnalysisSummaryDto {
           ts: latestSnapshot.ts,
         }
       : null,
+  };
+}
+
+function getShellCopy(pathname: string): ShellCopy {
+  if (pathname.startsWith("/analyses/")) {
+    return {
+      eyebrow: "Analysis View",
+      title: "分析详情",
+      description: "单图聚焦查看仓库演化结果，按结构、波动与趋势逐步深入。",
+    };
+  }
+
+  if (pathname.startsWith("/repositories/")) {
+    return {
+      eyebrow: "Module View",
+      title: "模块清单",
+      description: "独立查看仓库模块结构，避免工作台列表承载过多细节。",
+    };
+  }
+
+  return {
+    eyebrow: "Workspace",
+    title: "仓库工作台",
+    description: "在一个页面里完成仓库接入、任务运行、状态筛查和结果跳转。",
   };
 }
