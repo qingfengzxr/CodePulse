@@ -14,14 +14,18 @@ import { AnalysisDetailPage } from "./AnalysisDetailPage";
 import { RepositoryModulesPage } from "./RepositoryModulesPage";
 import { RepositoryListPage } from "./RepositoryListPage";
 import { getSamplingLabel } from "./sampling";
+import { ThemeProvider, type ThemeMode } from "./theme";
 
 type ApiError = {
   error: string;
   message: string;
 };
 
+const THEME_STORAGE_KEY = "code-dance-theme";
+
 export function App() {
   const location = useLocation();
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => readInitialThemeMode());
   const [localPath, setLocalPath] = useState("");
   const [repositories, setRepositories] = useState<RepositoryTargetDto[]>([]);
   const [moduleResults, setModuleResults] = useState<Record<string, ModuleUnitDto[] | undefined>>(
@@ -44,6 +48,12 @@ export function App() {
   useEffect(() => {
     void loadWorkspace();
   }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = themeMode;
+    document.documentElement.style.colorScheme = themeMode;
+    window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
+  }, [themeMode]);
 
   useEffect(() => {
     const activeAnalyses = Object.values(analysisSummaries).filter(
@@ -303,7 +313,8 @@ export function App() {
   }
 
   return (
-    <div className="app-shell">
+    <ThemeProvider theme={themeMode}>
+      <div className="app-shell">
       <aside className="sidebar">
         <div className="brand-block">
           <div className="brand-mark">CD</div>
@@ -365,6 +376,15 @@ export function App() {
           </div>
 
           <div className="topbar-meta">
+            <button
+              aria-label={`切换到${themeMode === "dark" ? "亮色" : "暗色"}主题`}
+              className="ghost-button theme-toggle"
+              onClick={() => setThemeMode((current) => (current === "dark" ? "light" : "dark"))}
+              type="button"
+            >
+              <span className="theme-toggle-mark">{themeMode === "dark" ? "LIGHT" : "DARK"}</span>
+              <span>{themeMode === "dark" ? "切换亮色" : "切换暗色"}</span>
+            </button>
             <span className="mono-badge">{repositories.length} 仓库</span>
             <span className="mono-badge">{Object.keys(analysisSummaries).length} 分析</span>
           </div>
@@ -423,8 +443,22 @@ export function App() {
           </Routes>
         </div>
       </div>
-    </div>
+      </div>
+    </ThemeProvider>
   );
+}
+
+function readInitialThemeMode(): ThemeMode {
+  if (typeof window === "undefined") {
+    return "dark";
+  }
+
+  const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+  if (stored === "light" || stored === "dark") {
+    return stored;
+  }
+
+  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
 }
 
 function summarizeAnalysis(analysis: AnalysisResultDto): AnalysisSummaryDto {

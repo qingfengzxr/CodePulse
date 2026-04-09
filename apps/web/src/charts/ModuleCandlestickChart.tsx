@@ -4,7 +4,15 @@ import * as echarts from "echarts";
 
 import type { CandlesResponseDto } from "@code-dance/contracts";
 import { buildCandlestickSeriesFromQuery, formatMetricValue } from "../analysis-data";
-import { axisStyle, baseGrid, createBaseChart, escapeHtml } from "./chart-helpers";
+import { useThemeMode } from "../theme";
+import {
+  axisStyle,
+  baseGrid,
+  createBaseChart,
+  createBaseTooltip,
+  escapeHtml,
+  getChartTokens,
+} from "./chart-helpers";
 
 type ModuleCandlestickChartProps = {
   candles: CandlesResponseDto;
@@ -15,6 +23,7 @@ type FocusMode = 8 | 16 | "all";
 export function ModuleCandlestickChart({ candles }: ModuleCandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.EChartsType | null>(null);
+  const themeMode = useThemeMode();
   const [focusMode, setFocusMode] = useState<FocusMode>(8);
   const [selectedModuleKey, setSelectedModuleKey] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -70,6 +79,7 @@ export function ModuleCandlestickChart({ candles }: ModuleCandlestickChartProps)
     }
 
     const compact = container.clientWidth < 720;
+    const tokens = getChartTokens();
     const candleData = selectedModule.candles.map((candle) => ({
       value: [candle.open, candle.close, candle.low, candle.high] as [
         number,
@@ -87,9 +97,7 @@ export function ModuleCandlestickChart({ candles }: ModuleCandlestickChartProps)
         backgroundColor: "transparent",
         animation: false,
         tooltip: {
-          trigger: "axis",
-          confine: true,
-          formatter: (paramsRaw: unknown) => {
+          ...createBaseTooltip((paramsRaw: unknown) => {
             const params = (Array.isArray(paramsRaw) ? paramsRaw[0] : paramsRaw) as
               | {
                   axisValueLabel?: string;
@@ -114,25 +122,26 @@ export function ModuleCandlestickChart({ candles }: ModuleCandlestickChartProps)
               `最低 LOC: ${formatMetricValue(candle[2] ?? 0)}`,
               `最高 LOC: ${formatMetricValue(candle[3] ?? 0)}`,
             ].join("<br/>");
-          },
+          }, tokens),
+          trigger: "axis",
         },
         grid: baseGrid(compact, 18, 92),
         xAxis: {
-          ...axisStyle(),
+          ...axisStyle(tokens),
           type: "category",
           data: data.xAxis,
           boundaryGap: true,
           axisLabel: {
-            color: "rgba(244, 239, 228, 0.72)",
+            color: tokens.axisLabel,
             formatter: (value: string) => value.slice(0, 10),
           },
         },
         yAxis: {
-          ...axisStyle(),
+          ...axisStyle(tokens),
           type: "value",
           name: currentModuleLabel,
           nameTextStyle: {
-            color: "rgba(244, 239, 228, 0.5)",
+            color: tokens.axisName,
             padding: [0, 0, 8, 0],
           },
         },
@@ -145,10 +154,10 @@ export function ModuleCandlestickChart({ candles }: ModuleCandlestickChartProps)
             height: 18,
             bottom: compact ? 44 : 20,
             borderColor: "transparent",
-            backgroundColor: "rgba(255, 255, 255, 0.06)",
+            backgroundColor: tokens.zoomBg,
             fillerColor: "rgba(251, 113, 133, 0.18)",
             textStyle: {
-              color: "rgba(244, 239, 228, 0.58)",
+              color: tokens.zoomText,
             },
             handleStyle: {
               color: "#fde68a",
@@ -179,7 +188,7 @@ export function ModuleCandlestickChart({ candles }: ModuleCandlestickChartProps)
     );
 
     chart.resize();
-  }, [data.xAxis, selectedModule]);
+  }, [data.xAxis, selectedModule, themeMode]);
 
   return (
     <div className="chart-panel">

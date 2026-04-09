@@ -9,7 +9,8 @@ import {
   formatMetricValue,
   type MetricKey,
 } from "../analysis-data";
-import { axisStyle, baseGrid, createBaseChart } from "./chart-helpers";
+import { useThemeMode } from "../theme";
+import { axisStyle, baseGrid, createBaseChart, createBaseTooltip, getChartTokens } from "./chart-helpers";
 
 type ModuleRankingChartProps = {
   analysisId: string;
@@ -25,6 +26,7 @@ const rankingMetrics: MetricKey[] = ["loc", "added", "deleted", "churn"];
 export function ModuleRankingChart({ analysisId }: ModuleRankingChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.EChartsType | null>(null);
+  const themeMode = useThemeMode();
   const [metric, setMetric] = useState<MetricKey>("loc");
   const [visibleCount, setVisibleCount] = useState<8 | 16>(8);
   const [rankingResponse, setRankingResponse] = useState<RankingResponseDto | null>(null);
@@ -95,16 +97,13 @@ export function ModuleRankingChart({ analysisId }: ModuleRankingChartProps) {
 
     const compact = container.clientWidth < 720;
     const reversed = [...ranking].reverse();
+    const tokens = getChartTokens();
 
     chart.setOption(
       {
         backgroundColor: "transparent",
         tooltip: {
-          trigger: "axis",
-          axisPointer: {
-            type: "shadow",
-          },
-          formatter: (paramsRaw: unknown) => {
+          ...createBaseTooltip((paramsRaw: unknown) => {
             const params = (Array.isArray(paramsRaw) ? paramsRaw[0] : paramsRaw) as
               | { name?: string; value?: number }
               | undefined;
@@ -113,19 +112,23 @@ export function ModuleRankingChart({ analysisId }: ModuleRankingChartProps) {
               `<strong>${params?.name ?? "-"}</strong>`,
               `${formatMetricLabel(metric)}: ${formatMetricValue(Number(params?.value ?? 0))}`,
             ].join("<br/>");
+          }, tokens),
+          trigger: "axis",
+          axisPointer: {
+            type: "shadow",
           },
         },
         grid: baseGrid(compact, 18, 22),
         xAxis: {
-          ...axisStyle(),
+          ...axisStyle(tokens),
           type: "value",
         },
         yAxis: {
-          ...axisStyle(),
+          ...axisStyle(tokens),
           type: "category",
           data: reversed.map((entry) => entry.name),
           axisLabel: {
-            color: "rgba(244, 239, 228, 0.72)",
+            color: tokens.axisLabel,
             width: compact ? 120 : 180,
             overflow: "truncate",
           },
@@ -149,7 +152,7 @@ export function ModuleRankingChart({ analysisId }: ModuleRankingChartProps) {
     );
 
     chart.resize();
-  }, [metric, ranking]);
+  }, [metric, ranking, themeMode]);
 
   const total = ranking.reduce((sum, entry) => sum + entry.value, 0);
 

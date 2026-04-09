@@ -4,7 +4,14 @@ import * as echarts from "echarts";
 
 import type { SeriesResponseDto } from "@code-dance/contracts";
 import { buildMetricSeriesFromQuery, formatMetricLabel, type MetricKey } from "../analysis-data";
-import { axisStyle, baseGrid, createBaseChart, createMetricTooltip } from "./chart-helpers";
+import { useThemeMode } from "../theme";
+import {
+  axisStyle,
+  baseGrid,
+  createBaseChart,
+  createMetricTooltip,
+  getChartTokens,
+} from "./chart-helpers";
 
 type ModuleTrendChartProps = {
   analysisId: string;
@@ -30,6 +37,7 @@ function buildDefaultSelection(
 export function ModuleTrendChart({ analysisId, seriesByMetric }: ModuleTrendChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.EChartsType | null>(null);
+  const themeMode = useThemeMode();
   const [metric, setMetric] = useState<MetricKey>("loc");
   const [focusMode, setFocusMode] = useState<FocusMode>(8);
   const [searchQuery, setSearchQuery] = useState("");
@@ -79,11 +87,12 @@ export function ModuleTrendChart({ analysisId, seriesByMetric }: ModuleTrendChar
     }
 
     const compact = container.clientWidth < 720;
+    const tokens = getChartTokens();
 
     chart.setOption(
       {
         backgroundColor: "transparent",
-        tooltip: createMetricTooltip(metric),
+        tooltip: createMetricTooltip(metric, tokens),
         legend: {
           type: "scroll",
           orient: compact ? "horizontal" : "vertical",
@@ -100,33 +109,33 @@ export function ModuleTrendChart({ analysisId, seriesByMetric }: ModuleTrendChar
             modules.map((module) => [module.name, selection[module.key] !== false]),
           ),
           pageIconColor: "#fde68a",
-          pageIconInactiveColor: "rgba(244, 239, 228, 0.28)",
+          pageIconInactiveColor: tokens.pageIconInactive,
           pageTextStyle: {
-            color: "rgba(244, 239, 228, 0.72)",
+            color: tokens.axisLabel,
           },
           textStyle: {
-            color: "#f4efe4",
+            color: tokens.tooltipText,
             width: compact ? 120 : 160,
             overflow: "truncate",
           },
         },
         grid: baseGrid(compact, compact ? 18 : 224, compact ? 92 : 80),
         xAxis: {
-          ...axisStyle(),
+          ...axisStyle(tokens),
           type: "category",
           data: xAxis,
           boundaryGap: false,
           axisLabel: {
-            color: "rgba(244, 239, 228, 0.72)",
+            color: tokens.axisLabel,
             formatter: (value: string) => value.slice(0, 10),
           },
         },
         yAxis: {
-          ...axisStyle(),
+          ...axisStyle(tokens),
           type: "value",
           name: formatMetricLabel(metric),
           nameTextStyle: {
-            color: "rgba(244, 239, 228, 0.5)",
+            color: tokens.axisName,
             padding: [0, 0, 8, 0],
           },
         },
@@ -139,10 +148,10 @@ export function ModuleTrendChart({ analysisId, seriesByMetric }: ModuleTrendChar
             height: 18,
             bottom: compact ? 46 : 18,
             borderColor: "transparent",
-            backgroundColor: "rgba(255, 255, 255, 0.06)",
+            backgroundColor: tokens.zoomBg,
             fillerColor: "rgba(56, 189, 248, 0.18)",
             textStyle: {
-              color: "rgba(244, 239, 228, 0.58)",
+              color: tokens.zoomText,
             },
             handleStyle: {
               color: "#fde68a",
@@ -170,7 +179,7 @@ export function ModuleTrendChart({ analysisId, seriesByMetric }: ModuleTrendChar
     );
 
     chart.resize();
-  }, [metric, modules, selection, xAxis]);
+  }, [metric, modules, selection, themeMode, xAxis]);
 
   function applyFocus(nextFocusMode: FocusMode) {
     setFocusMode(nextFocusMode);

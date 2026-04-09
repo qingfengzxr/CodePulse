@@ -4,7 +4,15 @@ import * as echarts from "echarts";
 
 import type { SeriesResponseDto } from "@code-dance/contracts";
 import { buildHeatmapSeriesFromQuery, formatMetricValue } from "../analysis-data";
-import { axisStyle, baseGrid, createBaseChart, escapeHtml } from "./chart-helpers";
+import { useThemeMode } from "../theme";
+import {
+  axisStyle,
+  baseGrid,
+  createBaseChart,
+  createBaseTooltip,
+  escapeHtml,
+  getChartTokens,
+} from "./chart-helpers";
 
 type ModuleChurnHeatmapChartProps = {
   series: SeriesResponseDto;
@@ -15,6 +23,7 @@ type FocusMode = 12 | 24 | "all";
 export function ModuleChurnHeatmapChart({ series }: ModuleChurnHeatmapChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.EChartsType | null>(null);
+  const themeMode = useThemeMode();
   const [focusMode, setFocusMode] = useState<FocusMode>(12);
   const { xAxis, yAxis, data, maxValue } = buildHeatmapSeriesFromQuery(series, focusMode);
 
@@ -44,14 +53,13 @@ export function ModuleChurnHeatmapChart({ series }: ModuleChurnHeatmapChartProps
     }
 
     const compact = container.clientWidth < 720;
+    const tokens = getChartTokens();
 
     chart.setOption(
       {
         backgroundColor: "transparent",
         tooltip: {
-          position: "top",
-          confine: true,
-          formatter: (paramsRaw: unknown) => {
+          ...createBaseTooltip((paramsRaw: unknown) => {
             const params = paramsRaw as {
               data?: [number, number, number];
             };
@@ -63,26 +71,27 @@ export function ModuleChurnHeatmapChart({ series }: ModuleChurnHeatmapChartProps
               escapeHtml(ts.slice(0, 10)),
               `Churn: ${formatMetricValue(point[2] ?? 0)}`,
             ].join("<br/>");
-          },
+          }, tokens),
+          position: "top",
         },
         grid: baseGrid(compact, 18, 110),
         xAxis: {
-          ...axisStyle(),
+          ...axisStyle(tokens),
           type: "category",
           data: xAxis,
           splitArea: { show: false },
           axisLabel: {
-            color: "rgba(244, 239, 228, 0.72)",
+            color: tokens.axisLabel,
             formatter: (value: string) => value.slice(0, 10),
           },
         },
         yAxis: {
-          ...axisStyle(),
+          ...axisStyle(tokens),
           type: "category",
           data: yAxis,
           splitArea: { show: false },
           axisLabel: {
-            color: "rgba(244, 239, 228, 0.72)",
+            color: tokens.axisLabel,
             width: compact ? 120 : 180,
             overflow: "truncate",
           },
@@ -95,7 +104,7 @@ export function ModuleChurnHeatmapChart({ series }: ModuleChurnHeatmapChartProps
           left: compact ? "center" : "right",
           bottom: compact ? 20 : 90,
           textStyle: {
-            color: "rgba(244, 239, 228, 0.72)",
+            color: tokens.axisLabel,
           },
           inRange: {
             color: ["#0f172a", "#1d4ed8", "#22c55e", "#f59e0b", "#f43f5e"],
@@ -112,10 +121,10 @@ export function ModuleChurnHeatmapChart({ series }: ModuleChurnHeatmapChartProps
             height: 18,
             bottom: compact ? 56 : 22,
             borderColor: "transparent",
-            backgroundColor: "rgba(255, 255, 255, 0.06)",
+            backgroundColor: tokens.zoomBg,
             fillerColor: "rgba(59, 130, 246, 0.18)",
             textStyle: {
-              color: "rgba(244, 239, 228, 0.58)",
+              color: tokens.zoomText,
             },
             handleStyle: {
               color: "#fde68a",
@@ -131,7 +140,7 @@ export function ModuleChurnHeatmapChart({ series }: ModuleChurnHeatmapChartProps
             progressive: 1_000,
             emphasis: {
               itemStyle: {
-                borderColor: "rgba(255,255,255,0.8)",
+                borderColor: tokens.tooltipText,
                 borderWidth: 1,
               },
             },
@@ -142,7 +151,7 @@ export function ModuleChurnHeatmapChart({ series }: ModuleChurnHeatmapChartProps
     );
 
     chart.resize();
-  }, [data, maxValue, xAxis, yAxis]);
+  }, [data, maxValue, themeMode, xAxis, yAxis]);
 
   return (
     <div className="chart-panel">

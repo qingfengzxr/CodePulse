@@ -4,7 +4,15 @@ import * as echarts from "echarts";
 
 import type { SeriesResponseDto } from "@code-dance/contracts";
 import { buildBumpChartSeriesFromQuery, formatMetricLabel, type MetricKey } from "../analysis-data";
-import { axisStyle, baseGrid, createBaseChart, escapeHtml } from "./chart-helpers";
+import { useThemeMode } from "../theme";
+import {
+  axisStyle,
+  baseGrid,
+  createBaseChart,
+  createBaseTooltip,
+  escapeHtml,
+  getChartTokens,
+} from "./chart-helpers";
 
 type ModuleBumpChartProps = {
   seriesByMetric: Partial<Record<MetricKey, SeriesResponseDto>>;
@@ -16,6 +24,7 @@ type BumpMetric = "loc" | "churn";
 export function ModuleBumpChart({ seriesByMetric }: ModuleBumpChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.EChartsType | null>(null);
+  const themeMode = useThemeMode();
   const [metric, setMetric] = useState<BumpMetric>("loc");
   const [focusMode, setFocusMode] = useState<FocusMode>(8);
   const activeSeries = seriesByMetric[metric] ?? seriesByMetric.loc ?? null;
@@ -49,14 +58,13 @@ export function ModuleBumpChart({ seriesByMetric }: ModuleBumpChartProps) {
     }
 
     const compact = container.clientWidth < 720;
+    const tokens = getChartTokens();
 
     chart.setOption(
       {
         backgroundColor: "transparent",
         tooltip: {
-          trigger: "axis",
-          confine: true,
-          formatter: (paramsRaw: unknown) => {
+          ...createBaseTooltip((paramsRaw: unknown) => {
             const params = (Array.isArray(paramsRaw) ? paramsRaw : [paramsRaw]) as Array<{
               axisValueLabel?: string;
               data?: number;
@@ -75,29 +83,30 @@ export function ModuleBumpChart({ seriesByMetric }: ModuleBumpChartProps) {
                   `${param.marker}${escapeHtml(param.seriesName)}: 第 ${Math.round(Number(param.data))} 名`,
               ),
             ].join("<br/>");
-          },
+          }, tokens),
+          trigger: "axis",
         },
         legend: {
           type: "scroll",
           bottom: compact ? 0 : 8,
           icon: "circle",
           textStyle: {
-            color: "rgba(244, 239, 228, 0.74)",
+            color: tokens.emphasisText,
           },
         },
         grid: baseGrid(compact, compact ? 18 : 120, compact ? 96 : 92),
         xAxis: {
-          ...axisStyle(),
+          ...axisStyle(tokens),
           type: "category",
           data: data.xAxis,
           boundaryGap: false,
           axisLabel: {
-            color: "rgba(244, 239, 228, 0.72)",
+            color: tokens.axisLabel,
             formatter: (value: string) => value.slice(0, 10),
           },
         },
         yAxis: {
-          ...axisStyle(),
+          ...axisStyle(tokens),
           type: "value",
           name: "排名",
           min: 1,
@@ -105,11 +114,11 @@ export function ModuleBumpChart({ seriesByMetric }: ModuleBumpChartProps) {
           inverse: true,
           minInterval: 1,
           axisLabel: {
-            color: "rgba(244, 239, 228, 0.72)",
+            color: tokens.axisLabel,
             formatter: (value: number) => `#${value}`,
           },
           nameTextStyle: {
-            color: "rgba(244, 239, 228, 0.5)",
+            color: tokens.axisName,
             padding: [0, 0, 8, 0],
           },
         },
@@ -120,10 +129,10 @@ export function ModuleBumpChart({ seriesByMetric }: ModuleBumpChartProps) {
             height: 18,
             bottom: compact ? 44 : 20,
             borderColor: "transparent",
-            backgroundColor: "rgba(255, 255, 255, 0.06)",
+            backgroundColor: tokens.zoomBg,
             fillerColor: "rgba(168, 85, 247, 0.18)",
             textStyle: {
-              color: "rgba(244, 239, 228, 0.58)",
+              color: tokens.zoomText,
             },
             handleStyle: {
               color: "#fde68a",
@@ -140,7 +149,7 @@ export function ModuleBumpChart({ seriesByMetric }: ModuleBumpChartProps) {
           endLabel: {
             show: true,
             formatter: `${module.name}  #${module.latestRank}`,
-            color: "rgba(244, 239, 228, 0.76)",
+            color: tokens.emphasisText,
           },
           emphasis: {
             focus: "series",
@@ -155,7 +164,7 @@ export function ModuleBumpChart({ seriesByMetric }: ModuleBumpChartProps) {
     );
 
     chart.resize();
-  }, [data]);
+  }, [data, themeMode]);
 
   return (
     <div className="chart-panel">

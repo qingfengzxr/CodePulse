@@ -4,7 +4,8 @@ import * as echarts from "echarts";
 
 import type { SeriesResponseDto } from "@code-dance/contracts";
 import { buildPercentageStackedAreaSeriesFromQuery, formatMetricValue } from "../analysis-data";
-import { axisStyle, baseGrid, createBaseChart } from "./chart-helpers";
+import { useThemeMode } from "../theme";
+import { axisStyle, baseGrid, createBaseChart, createBaseTooltip, getChartTokens } from "./chart-helpers";
 
 type ModuleShareStackedAreaChartProps = {
   series: SeriesResponseDto;
@@ -15,6 +16,7 @@ type FocusMode = 8 | 16 | "all";
 export function ModuleShareStackedAreaChart({ series }: ModuleShareStackedAreaChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.EChartsType | null>(null);
+  const themeMode = useThemeMode();
   const [focusMode, setFocusMode] = useState<FocusMode>(8);
   const { xAxis, modules, collapsedCount } = buildPercentageStackedAreaSeriesFromQuery(
     series,
@@ -51,13 +53,14 @@ export function ModuleShareStackedAreaChart({ series }: ModuleShareStackedAreaCh
     }
 
     const compact = container.clientWidth < 720;
+    const tokens = getChartTokens();
 
     chart.setOption(
       {
         backgroundColor: "transparent",
         tooltip: {
+          ...createBaseTooltip(undefined, tokens),
           trigger: "axis",
-          confine: true,
           valueFormatter: (value: unknown) => `${formatMetricValue(Number(value ?? 0))}%`,
         },
         legend: {
@@ -65,32 +68,32 @@ export function ModuleShareStackedAreaChart({ series }: ModuleShareStackedAreaCh
           bottom: compact ? 0 : 8,
           icon: "circle",
           textStyle: {
-            color: "rgba(244, 239, 228, 0.74)",
+            color: tokens.emphasisText,
           },
         },
         grid: baseGrid(compact, 18, compact ? 96 : 92),
         xAxis: {
-          ...axisStyle(),
+          ...axisStyle(tokens),
           type: "category",
           data: xAxis,
           boundaryGap: false,
           axisLabel: {
-            color: "rgba(244, 239, 228, 0.72)",
+            color: tokens.axisLabel,
             formatter: (value: string) => value.slice(0, 10),
           },
         },
         yAxis: {
-          ...axisStyle(),
+          ...axisStyle(tokens),
           type: "value",
           name: "占比 %",
           min: 0,
           max: 100,
           axisLabel: {
-            color: "rgba(244, 239, 228, 0.72)",
+            color: tokens.axisLabel,
             formatter: (value: number) => `${value}%`,
           },
           nameTextStyle: {
-            color: "rgba(244, 239, 228, 0.5)",
+            color: tokens.axisName,
             padding: [0, 0, 8, 0],
           },
         },
@@ -101,10 +104,10 @@ export function ModuleShareStackedAreaChart({ series }: ModuleShareStackedAreaCh
             height: 18,
             bottom: compact ? 44 : 20,
             borderColor: "transparent",
-            backgroundColor: "rgba(255, 255, 255, 0.06)",
+            backgroundColor: tokens.zoomBg,
             fillerColor: "rgba(34, 197, 94, 0.18)",
             textStyle: {
-              color: "rgba(244, 239, 228, 0.58)",
+              color: tokens.zoomText,
             },
             handleStyle: {
               color: "#fde68a",
@@ -132,7 +135,7 @@ export function ModuleShareStackedAreaChart({ series }: ModuleShareStackedAreaCh
     );
 
     chart.resize();
-  }, [modules, xAxis]);
+  }, [modules, themeMode, xAxis]);
 
   return (
     <div className="chart-panel">

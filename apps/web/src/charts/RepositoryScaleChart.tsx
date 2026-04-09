@@ -4,7 +4,8 @@ import * as echarts from "echarts";
 
 import type { SeriesResponseDto } from "@code-dance/contracts";
 import { buildTotalLocSeriesFromQuery, formatMetricValue } from "../analysis-data";
-import { axisStyle, baseGrid, createBaseChart } from "./chart-helpers";
+import { useThemeMode } from "../theme";
+import { axisStyle, baseGrid, createBaseChart, createBaseTooltip, getChartTokens } from "./chart-helpers";
 
 type RepositoryScaleChartProps = {
   series: SeriesResponseDto;
@@ -13,6 +14,7 @@ type RepositoryScaleChartProps = {
 export function RepositoryScaleChart({ series }: RepositoryScaleChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.EChartsType | null>(null);
+  const themeMode = useThemeMode();
   const { xAxis, values } = buildTotalLocSeriesFromQuery(series);
   const latestLoc = values.at(-1) ?? 0;
   const peakLoc = values.reduce((peak, value) => Math.max(peak, value), 0);
@@ -44,31 +46,32 @@ export function RepositoryScaleChart({ series }: RepositoryScaleChartProps) {
     }
 
     const compact = container.clientWidth < 720;
+    const tokens = getChartTokens();
 
     chart.setOption(
       {
         backgroundColor: "transparent",
         tooltip: {
+          ...createBaseTooltip(undefined, tokens),
           trigger: "axis",
-          confine: true,
         },
         grid: baseGrid(compact),
         xAxis: {
-          ...axisStyle(),
+          ...axisStyle(tokens),
           type: "category",
           data: xAxis,
           boundaryGap: false,
           axisLabel: {
-            color: "rgba(244, 239, 228, 0.72)",
+            color: tokens.axisLabel,
             formatter: (value: string) => value.slice(0, 10),
           },
         },
         yAxis: {
-          ...axisStyle(),
+          ...axisStyle(tokens),
           type: "value",
           name: "LOC",
           nameTextStyle: {
-            color: "rgba(244, 239, 228, 0.5)",
+            color: tokens.axisName,
             padding: [0, 0, 8, 0],
           },
         },
@@ -81,10 +84,10 @@ export function RepositoryScaleChart({ series }: RepositoryScaleChartProps) {
             height: 18,
             bottom: 18,
             borderColor: "transparent",
-            backgroundColor: "rgba(255, 255, 255, 0.06)",
+            backgroundColor: tokens.zoomBg,
             fillerColor: "rgba(245, 158, 11, 0.18)",
             textStyle: {
-              color: "rgba(244, 239, 228, 0.58)",
+              color: tokens.zoomText,
             },
             handleStyle: {
               color: "#fde68a",
@@ -113,7 +116,7 @@ export function RepositoryScaleChart({ series }: RepositoryScaleChartProps) {
     );
 
     chart.resize();
-  }, [values, xAxis]);
+  }, [themeMode, values, xAxis]);
 
   return (
     <div className="chart-panel">
