@@ -33,7 +33,9 @@ export function App() {
   );
   const [analysisDetails, setAnalysisDetails] = useState<Record<string, AnalysisResultDto>>({});
   const [analysisLoading, setAnalysisLoading] = useState<Record<string, boolean>>({});
-  const [selectedSampling, setSelectedSampling] = useState<AnalysisSamplingDto>("weekly");
+  const [selectedSamplingByRepository, setSelectedSamplingByRepository] = useState<
+    Record<string, AnalysisSamplingDto>
+  >({});
   const [deleteLoading, setDeleteLoading] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -172,7 +174,7 @@ export function App() {
 
   async function runAnalysis(
     repository: RepositoryTargetDto,
-    sampling = selectedSampling,
+    sampling = selectedSamplingByRepository[repository.id] ?? "weekly",
   ): Promise<AnalysisResultDto | null> {
     const loadingKey = `${repository.id}:${sampling}`;
     setAnalysisLoading((current) => ({ ...current, [loadingKey]: true }));
@@ -238,6 +240,11 @@ export function App() {
       }
 
       setRepositories((current) => current.filter((item) => item.id !== repository.id));
+      setSelectedSamplingByRepository((current) => {
+        const next = { ...current };
+        delete next[repository.id];
+        return next;
+      });
       setModuleResults((current) => {
         const next = { ...current };
         delete next[repository.id];
@@ -276,16 +283,24 @@ export function App() {
     }
   }
 
-  const latestAnalysesByRepository = Object.values(analysisSummaries)
-    .filter((analysis) => analysis.job.sampling === selectedSampling)
-    .reduce<Record<string, AnalysisSummaryDto>>((accumulator, analysis) => {
-      const current = accumulator[analysis.job.repositoryId];
+  const latestAnalysesByRepositoryAndSampling = Object.values(analysisSummaries).reduce<
+    Record<string, AnalysisSummaryDto>
+  >((accumulator, analysis) => {
+      const key = `${analysis.job.repositoryId}:${analysis.job.sampling}`;
+      const current = accumulator[key];
       if (!current || current.job.createdAt < analysis.job.createdAt) {
-        accumulator[analysis.job.repositoryId] = analysis;
+        accumulator[key] = analysis;
       }
 
       return accumulator;
     }, {});
+
+  function updateRepositorySampling(repositoryId: string, sampling: AnalysisSamplingDto) {
+    setSelectedSamplingByRepository((current) => ({
+      ...current,
+      [repositoryId]: sampling,
+    }));
+  }
 
   return (
     <div className="app-shell">
@@ -360,7 +375,7 @@ export function App() {
             <Route
               element={
                 <RepositoryListPage
-                  analysesByRepository={latestAnalysesByRepository}
+                  analysesByRepositoryAndSampling={latestAnalysesByRepositoryAndSampling}
                   analysisLoading={analysisLoading}
                   deleteLoading={deleteLoading}
                   error={error}
@@ -373,10 +388,10 @@ export function App() {
                   onRefreshWorkspace={loadWorkspace}
                   onRunAnalysis={runAnalysis}
                   onSubmit={handleSubmit}
-                  onUpdateSampling={setSelectedSampling}
+                  onUpdateSampling={updateRepositorySampling}
                   onUpdateLocalPath={setLocalPath}
                   repositories={repositories}
-                  selectedSampling={selectedSampling}
+                  selectedSamplingByRepository={selectedSamplingByRepository}
                   submitting={submitting}
                 />
               }

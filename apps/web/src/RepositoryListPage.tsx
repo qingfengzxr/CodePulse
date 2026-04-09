@@ -12,7 +12,7 @@ import { ProgressBar } from "./ProgressBar";
 import { getSamplingLabel, samplingOptions } from "./sampling";
 
 type RepositoryListPageProps = {
-  analysesByRepository: Record<string, AnalysisSummaryDto | undefined>;
+  analysesByRepositoryAndSampling: Record<string, AnalysisSummaryDto | undefined>;
   analysisLoading: Record<string, boolean>;
   deleteLoading: Record<string, boolean>;
   error: string | null;
@@ -28,15 +28,15 @@ type RepositoryListPageProps = {
     sampling?: AnalysisSamplingDto,
   ) => Promise<AnalysisResultDto | null> | AnalysisResultDto | null | void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void> | void;
-  onUpdateSampling: (sampling: AnalysisSamplingDto) => void;
+  onUpdateSampling: (repositoryId: string, sampling: AnalysisSamplingDto) => void;
   onUpdateLocalPath: (value: string) => void;
   repositories: RepositoryTargetDto[];
-  selectedSampling: AnalysisSamplingDto;
+  selectedSamplingByRepository: Record<string, AnalysisSamplingDto | undefined>;
   submitting: boolean;
 };
 
 export function RepositoryListPage({
-  analysesByRepository,
+  analysesByRepositoryAndSampling,
   analysisLoading,
   deleteLoading,
   error,
@@ -52,10 +52,13 @@ export function RepositoryListPage({
   onUpdateSampling,
   onUpdateLocalPath,
   repositories,
-  selectedSampling,
+  selectedSamplingByRepository,
   submitting,
 }: RepositoryListPageProps) {
-  const activeAnalyses = Object.values(analysesByRepository).filter((analysis) => analysis).length;
+  const activeAnalyses = repositories.filter((repository) => {
+    const selectedSampling = selectedSamplingByRepository[repository.id] ?? "weekly";
+    return Boolean(analysesByRepositoryAndSampling[`${repository.id}:${selectedSampling}`]);
+  }).length;
 
   return (
     <main className="layout">
@@ -70,14 +73,9 @@ export function RepositoryListPage({
         <div className="hero-side">
           <div className="hero-filter">
             {samplingOptions.map((sampling) => (
-              <button
-                className={`hero-filter-button ${selectedSampling === sampling ? "active" : ""}`}
-                key={sampling}
-                onClick={() => onUpdateSampling(sampling)}
-                type="button"
-              >
+              <span className="hero-filter-button hero-filter-button-static" key={sampling}>
                 {getSamplingLabel(sampling)}
-              </button>
+              </span>
             ))}
           </div>
           <div className="hero-stats hero-stats-inline">
@@ -90,8 +88,8 @@ export function RepositoryListPage({
               <strong>{activeAnalyses}</strong>
             </div>
             <div className="hero-stat">
-              <span>当前粒度</span>
-              <strong>{getSamplingLabel(selectedSampling)} / module</strong>
+              <span>采样模式</span>
+              <strong>独立切换</strong>
             </div>
           </div>
         </div>
@@ -135,9 +133,7 @@ export function RepositoryListPage({
             <p className="panel-kicker">Registry</p>
             <h2>已注册仓库</h2>
           </div>
-          <span className="stat-chip">
-            当前查看 {getSamplingLabel(selectedSampling)} 维度，已注册 {repositories.length} 个仓库
-          </span>
+          <span className="stat-chip">每张卡片独立切换采样，已注册 {repositories.length} 个仓库</span>
         </div>
 
         {loading ? <p className="feedback">加载中...</p> : null}
@@ -148,7 +144,9 @@ export function RepositoryListPage({
 
         <div className="repository-grid">
           {repositories.map((repository) => {
-            const analysis = analysesByRepository[repository.id];
+            const selectedSampling = selectedSamplingByRepository[repository.id] ?? "weekly";
+            const analysis =
+              analysesByRepositoryAndSampling[`${repository.id}:${selectedSampling}`];
             const latestSnapshot = analysis?.latestSnapshot ?? null;
             const statusLabel = analysis ? analysis.job.status : "idle";
 
@@ -194,7 +192,7 @@ export function RepositoryListPage({
                       <button
                         className={`hero-filter-button ${selectedSampling === sampling ? "active" : ""}`}
                         key={sampling}
-                        onClick={() => onUpdateSampling(sampling)}
+                        onClick={() => onUpdateSampling(repository.id, sampling)}
                         type="button"
                       >
                         {getSamplingLabel(sampling)}
