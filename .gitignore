@@ -1,0 +1,10 @@
+node_modules
+dist
+.turbo
+.DS_Store
+*.log
+*.swp
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+

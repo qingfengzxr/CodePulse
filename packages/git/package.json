@@ -1,0 +1,16 @@
+{
+  "name": "@code-dance/git",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test src/**/*.test.ts"
+  },
+  "dependencies": {
+    "@code-dance/domain": "workspace:*",
+    "toml": "^4.1.1"
+  }
+}
