@@ -187,6 +187,96 @@ function createCandles(analysisId = "analysis-1"): ModuleCandlePoint[] {
   ];
 }
 
+function createPerCommitSnapshots(analysisId = "analysis-per-commit-1"): Snapshot[] {
+  return [
+    { analysisId, commit: "aaa111", ts: "2026-04-06T00:00:00.000Z" },
+    { analysisId, commit: "bbb222", ts: "2026-04-07T00:00:00.000Z" },
+    { analysisId, commit: "ccc333", ts: "2026-04-08T00:00:00.000Z" },
+  ];
+}
+
+function createPerCommitPoints(analysisId = "analysis-per-commit-1"): MetricPoint[] {
+  return [
+    {
+      analysisId,
+      ts: "2026-04-06T00:00:00.000Z",
+      commit: "aaa111",
+      moduleKey: "rust:crate:core",
+      moduleName: "core",
+      moduleKind: "rust-crate",
+      loc: 10,
+      added: 10,
+      deleted: 0,
+      churn: 10,
+    },
+    {
+      analysisId,
+      ts: "2026-04-07T00:00:00.000Z",
+      commit: "bbb222",
+      moduleKey: "rust:crate:core",
+      moduleName: "core",
+      moduleKind: "rust-crate",
+      loc: 18,
+      added: 8,
+      deleted: 0,
+      churn: 8,
+    },
+    {
+      analysisId,
+      ts: "2026-04-08T00:00:00.000Z",
+      commit: "ccc333",
+      moduleKey: "rust:crate:core",
+      moduleName: "core",
+      moduleKind: "rust-crate",
+      loc: 14,
+      added: 1,
+      deleted: 5,
+      churn: 6,
+    },
+  ];
+}
+
+function createPerCommitCandles(analysisId = "analysis-per-commit-1"): ModuleCandlePoint[] {
+  return [
+    {
+      analysisId,
+      ts: "2026-04-06T00:00:00.000Z",
+      commit: "aaa111",
+      moduleKey: "rust:crate:core",
+      moduleName: "core",
+      moduleKind: "rust-crate",
+      open: 10,
+      high: 10,
+      low: 10,
+      close: 10,
+    },
+    {
+      analysisId,
+      ts: "2026-04-07T00:00:00.000Z",
+      commit: "bbb222",
+      moduleKey: "rust:crate:core",
+      moduleName: "core",
+      moduleKind: "rust-crate",
+      open: 10,
+      high: 18,
+      low: 10,
+      close: 18,
+    },
+    {
+      analysisId,
+      ts: "2026-04-08T00:00:00.000Z",
+      commit: "ccc333",
+      moduleKey: "rust:crate:core",
+      moduleName: "core",
+      moduleKind: "rust-crate",
+      open: 18,
+      high: 18,
+      low: 14,
+      close: 14,
+    },
+  ];
+}
+
 test("sqlite storage initializes schema and supports writes plus queries", async () => {
   await withStorage(async (storage) => {
     await storage.repositories.create(createRepository());
@@ -212,6 +302,18 @@ test("sqlite storage initializes schema and supports writes plus queries", async
     assert.equal(result.candles.length, 4);
     assert.equal(result.progress.phase, "analyzing-snapshots");
 
+    const summary = await storage.query.getAnalysisSummary("analysis-1");
+    assert.ok(summary);
+    assert.equal(summary.snapshotCount, 2);
+    assert.equal(summary.latestSnapshot?.seq, 2);
+    assert.equal(summary.latestSnapshot?.commit, "bbb222");
+
+    const detailSummary = await storage.query.getAnalysisDetailSummary("analysis-1");
+    assert.ok(detailSummary);
+    assert.equal(detailSummary.repository?.id, "repo-1");
+    assert.deepEqual(detailSummary.defaultModuleKeys, ["rust:crate:core", "rust:crate:web"]);
+    assert.equal(detailSummary.modules.length, 2);
+
     const modules = await storage.query.listModulesByAnalysis("analysis-1");
     assert.deepEqual(
       modules.map((module) => module.key),
@@ -226,6 +328,17 @@ test("sqlite storage initializes schema and supports writes plus queries", async
     assert.equal(series.timeline.length, 2);
     assert.deepEqual(series.series[0]?.values, [10, 14]);
 
+    const limitedSeries = await storage.query.querySeries({
+      analysisId: "analysis-1",
+      metric: "loc",
+      limit: 1,
+    });
+    assert.ok(limitedSeries);
+    assert.deepEqual(
+      limitedSeries.series.map((item) => item.moduleKey),
+      ["rust:crate:core"],
+    );
+
     const candles = await storage.query.queryCandles({
       analysisId: "analysis-1",
     });
@@ -236,6 +349,16 @@ test("sqlite storage initializes schema and supports writes plus queries", async
       low: 9,
       close: 14,
     });
+
+    const limitedCandles = await storage.query.queryCandles({
+      analysisId: "analysis-1",
+      limit: 1,
+    });
+    assert.ok(limitedCandles);
+    assert.deepEqual(
+      limitedCandles.series.map((item) => item.moduleKey),
+      ["rust:crate:core"],
+    );
 
     const distribution = await storage.query.queryDistribution({
       analysisId: "analysis-1",
@@ -255,6 +378,32 @@ test("sqlite storage initializes schema and supports writes plus queries", async
     assert.ok(ranking);
     assert.equal(ranking.items.length, 1);
     assert.equal(ranking.items[0]?.value, 14);
+
+    await storage.analysisJobs.create(
+      createJob({
+        id: "analysis-2",
+        repositoryId: "repo-1",
+        sampling: "weekly",
+        status: "done",
+        createdAt: "2026-04-10T10:05:00.000Z",
+        finishedAt: "2026-04-10T10:15:00.000Z",
+      }),
+    );
+    await storage.analysisJobs.upsertProgress(
+      "analysis-2",
+      createProgress({
+        phase: "done",
+        percent: 100,
+        sampledCommits: 2,
+        completedSnapshots: 2,
+        startedAt: "2026-04-10T10:05:00.000Z",
+        updatedAt: "2026-04-10T10:15:00.000Z",
+      }),
+    );
+
+    const latestDone = await storage.query.getLatestCompletedAnalysis("repo-1", "weekly");
+    assert.ok(latestDone);
+    assert.equal(latestDone.id, "analysis-2");
   });
 });
 
@@ -286,6 +435,103 @@ test("replaceAnalysisResult overwrites prior data without duplicates", async () 
       result.points.map((point) => point.moduleKey),
       ["rust:crate:core", "rust:crate:core"],
     );
+  });
+});
+
+test("queryCandles aggregates from latest per-commit analysis when requesting weekly candles", async () => {
+  await withStorage(async (storage) => {
+    await storage.repositories.create(createRepository());
+
+    await storage.analysisJobs.create(
+      createJob({
+        id: "analysis-weekly-1",
+        sampling: "weekly",
+        status: "done",
+        createdAt: "2026-04-09T10:05:00.000Z",
+        finishedAt: "2026-04-09T10:15:00.000Z",
+      }),
+    );
+    await storage.analysisJobs.upsertProgress(
+      "analysis-weekly-1",
+      createProgress({
+        phase: "done",
+        percent: 100,
+        sampledCommits: 1,
+        completedSnapshots: 1,
+      }),
+    );
+    await storage.persistence.replaceAnalysisResult({
+      analysisId: "analysis-weekly-1",
+      snapshots: [{ analysisId: "analysis-weekly-1", commit: "ccc333", ts: "2026-04-08T00:00:00.000Z" }],
+      points: [
+        {
+          analysisId: "analysis-weekly-1",
+          ts: "2026-04-08T00:00:00.000Z",
+          commit: "ccc333",
+          moduleKey: "rust:crate:core",
+          moduleName: "core",
+          moduleKind: "rust-crate",
+          loc: 14,
+          added: 9,
+          deleted: 5,
+          churn: 14,
+        },
+      ],
+      candles: [
+        {
+          analysisId: "analysis-weekly-1",
+          ts: "2026-04-08T00:00:00.000Z",
+          commit: "ccc333",
+          moduleKey: "rust:crate:core",
+          moduleName: "core",
+          moduleKind: "rust-crate",
+          open: 10,
+          high: 14,
+          low: 10,
+          close: 14,
+        },
+      ],
+    });
+
+    await storage.analysisJobs.create(
+      createJob({
+        id: "analysis-per-commit-1",
+        sampling: "per-commit",
+        status: "done",
+        createdAt: "2026-04-10T10:05:00.000Z",
+        finishedAt: "2026-04-10T10:25:00.000Z",
+      }),
+    );
+    await storage.analysisJobs.upsertProgress(
+      "analysis-per-commit-1",
+      createProgress({
+        phase: "done",
+        percent: 100,
+        sampledCommits: 3,
+        completedSnapshots: 3,
+      }),
+    );
+    await storage.persistence.replaceAnalysisResult({
+      analysisId: "analysis-per-commit-1",
+      snapshots: createPerCommitSnapshots(),
+      points: createPerCommitPoints(),
+      candles: createPerCommitCandles(),
+    });
+
+    const candles = await storage.query.queryCandles({
+      analysisId: "analysis-weekly-1",
+      sampling: "weekly",
+      moduleKeys: ["rust:crate:core"],
+    });
+
+    assert.ok(candles);
+    assert.equal(candles.timeline.length, 1);
+    assert.deepEqual(candles.series[0]?.values[0], {
+      open: 10,
+      high: 18,
+      low: 10,
+      close: 14,
+    });
   });
 });
 

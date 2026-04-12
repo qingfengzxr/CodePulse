@@ -1,7 +1,10 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import type { ModuleUnitDto, RepositoryTargetDto } from "@code-dance/contracts";
+import { ModuleTreemapChart } from "./charts/ModuleTreemapChart";
+import { formatModuleSource, formatRepositoryKind } from "./display";
+import { useI18n } from "./i18n";
 
 type RepositoryModulesPageProps = {
   moduleLoading: Record<string, boolean>;
@@ -16,12 +19,14 @@ export function RepositoryModulesPage({
   onLoadModules,
   repositories,
 }: RepositoryModulesPageProps) {
+  const { t, formatNumber } = useI18n();
   const { repositoryId } = useParams();
   const repository = repositoryId
     ? repositories.find((candidate) => candidate.id === repositoryId)
     : undefined;
   const modules = repositoryId ? moduleResults[repositoryId] : undefined;
   const loading = repositoryId ? moduleLoading[repositoryId] : false;
+  const [viewMode, setViewMode] = useState<"list" | "treemap">("list");
 
   useEffect(() => {
     if (!repositoryId || modules) {
@@ -36,8 +41,8 @@ export function RepositoryModulesPage({
       <main className="page-grid">
         <section className="surface-section">
           <div className="empty-state">
-            <strong>仓库 ID 缺失</strong>
-            <p>当前页面缺少目标仓库标识，无法加载模块清单。</p>
+            <strong>{t("feedback.moduleIdMissing")}</strong>
+            <p>{t("feedback.moduleIdMissingBody")}</p>
           </div>
         </section>
       </main>
@@ -50,16 +55,16 @@ export function RepositoryModulesPage({
         <section className="surface-section">
           <div className="section-heading section-heading-inline">
             <div>
-              <p className="section-kicker">Modules</p>
-              <h2>未找到对应仓库</h2>
+              <p className="section-kicker">{t("page.modules.title")}</p>
+              <h2>{t("feedback.repositoryMissing")}</h2>
             </div>
             <Link className="secondary-button" to="/">
-              返回工作台
+              {t("action.backToWorkspace")}
             </Link>
           </div>
           <div className="empty-state">
-            <strong>仓库不存在</strong>
-            <p>该仓库可能尚未接入工作台，或者已被删除。</p>
+            <strong>{t("feedback.repositoryMissing")}</strong>
+            <p>{t("feedback.repositoryMissingBody")}</p>
           </div>
         </section>
       </main>
@@ -71,39 +76,43 @@ export function RepositoryModulesPage({
       <section className="surface-section detail-summary-section">
         <div className="section-heading section-heading-inline">
           <div>
-            <p className="section-kicker">Modules</p>
+            <p className="section-kicker">{t("page.modules.title")}</p>
             <h2>{repository.name}</h2>
-            <p className="section-description">这里专门查看模块结构，不把细节挤回工作台首页。</p>
+            <p className="section-description">{t("page.modules.description")}</p>
           </div>
           <div className="detail-action-row">
             <Link className="secondary-button" to="/">
-              返回工作台
+              {t("action.backToWorkspace")}
             </Link>
             <button
               className="primary-button"
               onClick={() => void onLoadModules(repository.id)}
               type="button"
             >
-              {loading ? "探测中..." : modules ? "刷新模块" : "探测模块"}
+              {loading
+                ? t("feedback.loadingModules")
+                : modules
+                  ? t("action.refreshModules")
+                  : t("action.detectModules")}
             </button>
           </div>
         </div>
 
         <div className="summary-grid summary-grid-compact">
           <article className="summary-card">
-            <span>默认分支</span>
-            <strong>{repository.defaultBranch ?? "unknown"}</strong>
-            <p>当前仓库登记的默认分支。</p>
+            <span>{t("label.branch")}</span>
+            <strong>{repository.defaultBranch ?? t("status.unknown")}</strong>
+            <p>{t("label.branch")}</p>
           </article>
           <article className="summary-card">
-            <span>语言类型</span>
-            <strong>{repository.detectedKinds.join(", ")}</strong>
-            <p>仓库当前识别出的技术栈。</p>
+            <span>{t("label.languages")}</span>
+            <strong>{repository.detectedKinds.map(formatRepositoryKind).join(", ")}</strong>
+            <p>{t("label.languages")}</p>
           </article>
           <article className="summary-card">
-            <span>模块数量</span>
-            <strong>{modules?.length ?? 0}</strong>
-            <p>已探测到的技术模块数量。</p>
+            <span>{t("label.moduleCount")}</span>
+            <strong>{formatNumber(modules?.length ?? 0)}</strong>
+            <p>{t("page.modules.structureBody")}</p>
           </article>
         </div>
       </section>
@@ -111,35 +120,53 @@ export function RepositoryModulesPage({
       <section className="surface-section">
         <div className="section-heading section-heading-inline">
           <div>
-            <p className="section-kicker">Structure</p>
-            <h2>模块清单</h2>
-            <p className="section-description">重点看名称、路径、文件数和来源，避免额外装饰干扰阅读。</p>
+            <p className="section-kicker">{t("page.modules.structure")}</p>
+            <h2>{t("page.modules.title")}</h2>
+            <p className="section-description">{t("page.modules.structureBody")}</p>
           </div>
-          <span className="meta-chip">{modules?.length ?? 0} 个模块</span>
+          <div className="module-view-controls">
+            <div className="segmented-control segmented-control-compact">
+              <button
+                className={`segmented-option ${viewMode === "list" ? "active" : ""}`}
+                onClick={() => setViewMode("list")}
+                type="button"
+              >
+                {t("page.modules.view.list")}
+              </button>
+              <button
+                className={`segmented-option ${viewMode === "treemap" ? "active" : ""}`}
+                onClick={() => setViewMode("treemap")}
+                type="button"
+              >
+                {t("page.modules.view.treemap")}
+              </button>
+            </div>
+            <span className="meta-chip">{t("chart.churn.summary.modules", { count: formatNumber(modules?.length ?? 0) })}</span>
+          </div>
         </div>
 
         {loading ? (
           <div className="empty-state">
-            <strong>正在探测模块</strong>
-            <p>模块分析完成后会自动显示在下方表格中。</p>
+            <strong>{t("feedback.loadingModules")}</strong>
+            <p>{t("feedback.loadingModulesBody")}</p>
           </div>
         ) : null}
 
         {!loading && modules && modules.length === 0 ? (
           <div className="empty-state">
-            <strong>当前未探测到可用模块</strong>
-            <p>可以重新探测一次，或检查仓库目录结构是否完整。</p>
+            <strong>{t("feedback.noModules")}</strong>
+            <p>{t("feedback.noModulesBody")}</p>
           </div>
         ) : null}
 
-        {!loading && modules?.length ? (
+        {!loading && modules?.length && viewMode === "list" ? (
           <div className="module-table-wrap">
             <div className="module-table">
               <div className="module-table-header">
-                <span>模块</span>
-                <span>路径</span>
-                <span>文件数</span>
-                <span>来源</span>
+                <span>{t("label.module")}</span>
+                <span>{t("label.path")}</span>
+                <span>{t("label.files")}</span>
+                <span>{t("label.source")}</span>
               </div>
               <div className="module-table-body">
                 {modules.map((module) => (
@@ -151,14 +178,22 @@ export function RepositoryModulesPage({
                     <div className="module-table-cell">
                       <code className="module-table-path">{module.rootPath}</code>
                     </div>
-                    <div className="module-table-cell module-table-number">{module.files.length}</div>
+                    <div className="module-table-cell module-table-number">
+                      {formatNumber(module.files.length)}
+                    </div>
                     <div className="module-table-cell">
-                      <span className="meta-chip">{module.source}</span>
+                      <span className="meta-chip">{formatModuleSource(module.source)}</span>
                     </div>
                   </article>
                 ))}
               </div>
             </div>
+          </div>
+        ) : null}
+
+        {!loading && modules?.length && viewMode === "treemap" ? (
+          <div className="module-treemap-panel">
+            <ModuleTreemapChart modules={modules} />
           </div>
         ) : null}
       </section>

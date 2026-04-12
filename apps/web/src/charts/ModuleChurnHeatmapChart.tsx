@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import * as echarts from "echarts";
 
 import type { SeriesResponseDto } from "@code-dance/contracts";
 import { buildHeatmapSeriesFromQuery, formatMetricValue } from "../analysis-data";
+import { useI18n } from "../i18n";
 import { useThemeMode } from "../theme";
 import {
   axisStyle,
@@ -11,21 +12,40 @@ import {
   createBaseChart,
   createBaseTooltip,
   escapeHtml,
+  getHeatmapPalette,
   getChartTokens,
 } from "./chart-helpers";
 
 type ModuleChurnHeatmapChartProps = {
   series: SeriesResponseDto;
+  allSeries?: SeriesResponseDto | null;
+  allSeriesLoading?: boolean;
+  onRequestAllSeries?: () => void;
+  showHeader?: boolean;
 };
 
 type FocusMode = 12 | 24 | "all";
 
-export function ModuleChurnHeatmapChart({ series }: ModuleChurnHeatmapChartProps) {
+export function ModuleChurnHeatmapChart({
+  series,
+  allSeries,
+  allSeriesLoading = false,
+  onRequestAllSeries,
+  showHeader = true,
+}: ModuleChurnHeatmapChartProps) {
+  const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.EChartsType | null>(null);
   const themeMode = useThemeMode();
   const [focusMode, setFocusMode] = useState<FocusMode>(12);
-  const { xAxis, yAxis, data, maxValue } = buildHeatmapSeriesFromQuery(series, focusMode);
+  const requiresExpandedSeries = focusMode !== "all" && series.series.length < focusMode;
+  const effectiveSeries =
+    (focusMode === "all" || requiresExpandedSeries) && allSeries ? allSeries : series;
+  const expandedSeriesRequested = focusMode === "all" || requiresExpandedSeries;
+  const { xAxis, yAxis, data, maxValue, visualMax } = useMemo(
+    () => buildHeatmapSeriesFromQuery(effectiveSeries, focusMode),
+    [effectiveSeries, focusMode],
+  );
 
   useEffect(() => {
     if (!containerRef.current) {
@@ -58,18 +78,21 @@ export function ModuleChurnHeatmapChart({ series }: ModuleChurnHeatmapChartProps
     chart.setOption(
       {
         backgroundColor: "transparent",
+        animation: false,
+        animationDurationUpdate: 0,
         tooltip: {
           ...createBaseTooltip((paramsRaw: unknown) => {
             const params = paramsRaw as {
-              data?: [number, number, number];
+              data?: [number, number, number, number];
             };
-            const point = params.data ?? [0, 0, 0];
+            const point = params.data ?? [0, 0, 0, 0];
             const ts = xAxis[point[0] ?? 0] ?? "-";
             const moduleName = yAxis[point[1] ?? 0] ?? "-";
+            const rawValue = point[3] ?? 0;
             return [
               `<strong>${escapeHtml(moduleName)}</strong>`,
               escapeHtml(ts.slice(0, 10)),
-              `Churn: ${formatMetricValue(point[2] ?? 0)}`,
+              `${t("metric.churn")}: ${formatMetricValue(rawValue)}`,
             ].join("<br/>");
           }, tokens),
           position: "top",
@@ -98,16 +121,17 @@ export function ModuleChurnHeatmapChart({ series }: ModuleChurnHeatmapChartProps
         },
         visualMap: {
           min: 0,
-          max: Math.max(maxValue, 1),
+          max: Math.max(visualMax, 1),
           calculable: true,
           orient: compact ? "horizontal" : "vertical",
           left: compact ? "center" : "right",
           bottom: compact ? 20 : 90,
+          text: [t("chart.churn.heat.high"), t("chart.churn.heat.low")],
           textStyle: {
             color: tokens.axisLabel,
           },
           inRange: {
-            color: ["#0f172a", "#1d4ed8", "#22c55e", "#f59e0b", "#f43f5e"],
+            color: getHeatmapPalette(tokens),
           },
         },
         dataZoom: [
@@ -147,25 +171,32 @@ export function ModuleChurnHeatmapChart({ series }: ModuleChurnHeatmapChartProps
           },
         ],
       } as echarts.EChartsOption,
-      true,
+      {
+        notMerge: false,
+        lazyUpdate: true,
+      },
     );
 
     chart.resize();
-  }, [data, maxValue, themeMode, xAxis, yAxis]);
+  }, [data, t, themeMode, visualMax, xAxis, yAxis]);
 
   return (
     <div className="chart-panel">
       <div className="chart-toolbar">
-        <div>
-          <h3>Churn 热力图</h3>
-          <p className="chart-subtitle">
-            横轴看时间，纵轴看模块，颜色越热表示该阶段模块 churn 越高，适合扫描热点迁移。
-          </p>
-        </div>
+        {showHeader ? (
+          <div>
+            <h3>{t("chart.churn.title")}</h3>
+            <p className="chart-subtitle">{t("chart.churn.description")}</p>
+          </div>
+        ) : null}
         <div className="chart-toolbar-inline">
           <div className="chart-summary">
-            <span className="chart-chip">最大 Churn {formatMetricValue(maxValue)}</span>
-            <span className="chart-chip">{yAxis.length} 个模块</span>
+            <span className="chart-chip">
+              {t("chart.churn.summary.max", { value: formatMetricValue(maxValue) })}
+            </span>
+            <span className="chart-chip">
+              {t("chart.churn.summary.modules", { count: String(yAxis.length) })}
+            </span>
           </div>
           <div className="chart-focus-switch">
             {[12, 24, "all"].map((option) => (
@@ -173,15 +204,25 @@ export function ModuleChurnHeatmapChart({ series }: ModuleChurnHeatmapChartProps
                 aria-pressed={focusMode === option}
                 className={`chart-toggle-button ${focusMode === option ? "active" : ""}`}
                 key={String(option)}
-                onClick={() => setFocusMode(option as FocusMode)}
+                onClick={() => {
+                  setFocusMode(option as FocusMode);
+                  if (option === "all" || (typeof option === "number" && series.series.length < option)) {
+                    onRequestAllSeries?.();
+                  }
+                }}
                 type="button"
               >
-                {option === "all" ? "全部" : `前 ${option}`}
+                {option === "all"
+                  ? t("chart.focus.all")
+                  : t("chart.focus.top", { count: String(option) })}
               </button>
             ))}
           </div>
         </div>
       </div>
+      {expandedSeriesRequested && allSeriesLoading && !allSeries ? (
+        <p className="feedback">{t("action.loadAllModules")}...</p>
+      ) : null}
       <div className="chart-surface chart-surface-tall" ref={containerRef} />
     </div>
   );

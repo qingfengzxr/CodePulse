@@ -4,6 +4,7 @@ import * as echarts from "echarts";
 
 import type { SeriesResponseDto } from "@code-dance/contracts";
 import { buildStackedAreaSeriesFromQuery, formatMetricValue } from "../analysis-data";
+import { useI18n } from "../i18n";
 import { useThemeMode } from "../theme";
 import {
   axisStyle,
@@ -15,17 +16,46 @@ import {
 
 type ModuleStackedAreaChartProps = {
   series: SeriesResponseDto;
+  allSeries?: SeriesResponseDto | null;
+  allSeriesLoading?: boolean;
+  onRequestAllSeries?: () => void;
+  showHeader?: boolean;
 };
 
 type FocusMode = 8 | 16 | "all";
 
-export function ModuleStackedAreaChart({ series }: ModuleStackedAreaChartProps) {
+export function ModuleStackedAreaChart({
+  series,
+  allSeries,
+  allSeriesLoading = false,
+  onRequestAllSeries,
+  showHeader = true,
+}: ModuleStackedAreaChartProps) {
+  const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.EChartsType | null>(null);
   const themeMode = useThemeMode();
   const [focusMode, setFocusMode] = useState<FocusMode>(8);
-  const { xAxis, modules, collapsedCount } = buildStackedAreaSeriesFromQuery(series, focusMode);
+  const requiresExpandedSeries = focusMode !== "all" && series.series.length < focusMode;
+  const effectiveSeries =
+    (focusMode === "all" || requiresExpandedSeries) && allSeries ? allSeries : series;
+  const expandedSeriesRequested = focusMode === "all" || requiresExpandedSeries;
+  const { xAxis, modules, collapsedCount } = buildStackedAreaSeriesFromQuery(effectiveSeries, focusMode);
   const latestTotal = modules.reduce((sum, module) => sum + (module.values.at(-1) ?? 0), 0);
+  const requestedModuleCount =
+    focusMode === "all"
+      ? allSeries?.series.length ?? series.series.length
+      : Math.min(focusMode, effectiveSeries.series.length);
+  const moduleCountLabel =
+    focusMode === "all"
+      ? allSeries
+        ? t("chart.summary.loadedAll", { count: String(allSeries.series.length) })
+        : allSeriesLoading
+          ? t("action.loadAllModules")
+          : t("chart.summary.loadedTop", { count: String(series.series.length) })
+      : t("chart.summary.loadedTop", {
+          count: String(requestedModuleCount),
+        });
 
   useEffect(() => {
     if (!containerRef.current) {
@@ -137,18 +167,21 @@ export function ModuleStackedAreaChart({ series }: ModuleStackedAreaChartProps) 
   return (
     <div className="chart-panel">
       <div className="chart-toolbar">
-        <div>
-          <h3>模块堆叠面积图</h3>
-          <p className="chart-subtitle">
-            默认折叠长尾模块，先看结构占比和整体构成，再进入聚焦层做模块细查。
-          </p>
-        </div>
+        {showHeader ? (
+          <div>
+            <h3>{t("chart.stacked.title")}</h3>
+            <p className="chart-subtitle">{t("chart.stacked.description")}</p>
+          </div>
+        ) : null}
         <div className="chart-toolbar-inline">
           <div className="chart-summary">
-            <span className="chart-chip">总 LOC {formatMetricValue(latestTotal)}</span>
+            <span className="chart-chip">
+              {t("chart.stacked.summary.total", { value: formatMetricValue(latestTotal) })}
+            </span>
+            <span className="chart-chip">{moduleCountLabel}</span>
             {collapsedCount > 0 ? (
               <span className="chart-chip chart-chip-muted">
-                Others 吸收 {collapsedCount} 个模块
+                {t("chart.stacked.summary.collapsed", { count: String(collapsedCount) })}
               </span>
             ) : null}
           </div>
@@ -158,15 +191,25 @@ export function ModuleStackedAreaChart({ series }: ModuleStackedAreaChartProps) 
                 aria-pressed={focusMode === option}
                 className={`chart-toggle-button ${focusMode === option ? "active" : ""}`}
                 key={String(option)}
-                onClick={() => setFocusMode(option)}
+                onClick={() => {
+                  setFocusMode(option);
+                  if (option === "all" || (typeof option === "number" && series.series.length < option)) {
+                    onRequestAllSeries?.();
+                  }
+                }}
                 type="button"
               >
-                {option === "all" ? "全部" : `前 ${option}`}
+                {option === "all"
+                  ? t("chart.focus.all")
+                  : t("chart.focus.top", { count: String(option) })}
               </button>
             ))}
           </div>
         </div>
       </div>
+      {expandedSeriesRequested && allSeriesLoading && !allSeries ? (
+        <p className="feedback">{t("action.loadAllModules")}...</p>
+      ) : null}
       <div className="chart-surface" ref={containerRef} />
     </div>
   );

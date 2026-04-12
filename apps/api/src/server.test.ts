@@ -338,6 +338,24 @@ test("api persists analyses and serves query endpoints from sqlite", async () =>
     assert.equal(summariesResponse.json()[0].job.id, initial.job.id);
     assert.equal(summariesResponse.json()[0].snapshotCount, 2);
 
+    const summaryByIdResponse = await app.inject({
+      method: "GET",
+      url: `/api/analysis-summaries/${initial.job.id}`,
+    });
+    assert.equal(summaryByIdResponse.statusCode, 200);
+    assert.equal(summaryByIdResponse.json().latestSnapshot.seq, 2);
+
+    const detailSummaryResponse = await app.inject({
+      method: "GET",
+      url: `/api/analysis-details/${initial.job.id}`,
+    });
+    assert.equal(detailSummaryResponse.statusCode, 200);
+    assert.equal(detailSummaryResponse.json().modules.length, 2);
+    assert.deepEqual(detailSummaryResponse.json().defaultModuleKeys, [
+      "rust:crate:core",
+      "rust:crate:web",
+    ]);
+
     const seriesResponse = await app.inject({
       method: "GET",
       url: `/api/series?analysisId=${initial.job.id}&metric=loc&moduleKeys=rust:crate:core`,
@@ -358,6 +376,26 @@ test("api persists analyses and serves query endpoints from sqlite", async () =>
     });
     assert.equal(candlesResponse.statusCode, 200);
     assert.equal(candlesResponse.json().series[0].values[1].high, 14);
+
+    const defaultSeriesResponse = await app.inject({
+      method: "GET",
+      url: `/api/series?analysisId=${initial.job.id}&metric=loc&limit=1`,
+    });
+    assert.equal(defaultSeriesResponse.statusCode, 200);
+    assert.deepEqual(
+      defaultSeriesResponse.json().series.map((item: { moduleKey: string }) => item.moduleKey),
+      ["rust:crate:core"],
+    );
+
+    const defaultCandlesResponse = await app.inject({
+      method: "GET",
+      url: `/api/candles?analysisId=${initial.job.id}&limit=1`,
+    });
+    assert.equal(defaultCandlesResponse.statusCode, 200);
+    assert.deepEqual(
+      defaultCandlesResponse.json().series.map((item: { moduleKey: string }) => item.moduleKey),
+      ["rust:crate:core"],
+    );
 
     const rankingResponse = await app.inject({
       method: "GET",
@@ -393,22 +431,30 @@ test("api persists analyses and serves query endpoints from sqlite", async () =>
       method: "DELETE",
       url: `/api/repositories/${repository.id}`,
     });
-    assert.equal(deleteResponse.statusCode, 204);
+    assert.equal(deleteResponse.statusCode, 202);
 
-    const getDeletedRepositoryResponse = await app.inject({
-      method: "GET",
-      url: `/api/repositories/${repository.id}/modules`,
-    });
+    const getDeletedRepositoryResponse = await waitFor(
+      async () =>
+        app.inject({
+          method: "GET",
+          url: `/api/repositories/${repository.id}/modules`,
+        }),
+      (response) => response.statusCode === 404,
+    );
     assert.equal(getDeletedRepositoryResponse.statusCode, 404);
 
-    const reRegisterResponse = await app.inject({
-      method: "POST",
-      url: "/api/repositories",
-      payload: {
-        sourceType: "local-path",
-        localPath: repositoryPath,
-      },
-    });
+    const reRegisterResponse = await waitFor(
+      async () =>
+        app.inject({
+          method: "POST",
+          url: "/api/repositories",
+          payload: {
+            sourceType: "local-path",
+            localPath: repositoryPath,
+          },
+        }),
+      (response) => response.statusCode === 201,
+    );
     assert.equal(reRegisterResponse.statusCode, 201);
   } finally {
     await app.close();
@@ -577,6 +623,78 @@ test("api rejects duplicate repository registration for the same path", async ()
   }
 });
 
+test("api caches repository module detection by repository head", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "code-dance-api-modules-cache-test-"));
+  const storage = createSqliteStorage({ dbPath: join(dir, "api.sqlite") });
+  const repositoryPath = join(dir, "fixture");
+  await mkdir(repositoryPath);
+
+  let detectCalls = 0;
+  let headCalls = 0;
+  const app = createServer({
+    storage,
+    probeLocalRepositoryImpl: async (localPath) => ({
+      name: "fixture",
+      localPath,
+      defaultBranch: "main",
+      detectedKinds: ["rust"],
+    }),
+    readRepositoryHeadImpl: async () => {
+      headCalls += 1;
+      return headCalls <= 2 ? "head-1" : "head-2";
+    },
+    detectRepositoryModulesImpl: async () => {
+      detectCalls += 1;
+      return [
+        {
+          key: "rust:crate:core",
+          name: "core",
+          kind: "rust-crate",
+          rootPath: "crates/core",
+          files: ["crates/core/src/lib.rs"],
+          source: "auto",
+        },
+      ];
+    },
+  });
+
+  try {
+    const registerResponse = await app.inject({
+      method: "POST",
+      url: "/api/repositories",
+      payload: {
+        sourceType: "local-path",
+        localPath: repositoryPath,
+      },
+    });
+    assert.equal(registerResponse.statusCode, 201);
+    const repository = registerResponse.json();
+
+    const firstModules = await app.inject({
+      method: "GET",
+      url: `/api/repositories/${repository.id}/modules`,
+    });
+    assert.equal(firstModules.statusCode, 200);
+
+    const secondModules = await app.inject({
+      method: "GET",
+      url: `/api/repositories/${repository.id}/modules`,
+    });
+    assert.equal(secondModules.statusCode, 200);
+    assert.equal(detectCalls, 1);
+
+    const thirdModules = await app.inject({
+      method: "GET",
+      url: `/api/repositories/${repository.id}/modules`,
+    });
+    assert.equal(thirdModules.statusCode, 200);
+    assert.equal(detectCalls, 2);
+  } finally {
+    await app.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("api allows different sampling analyses for the same repository", async () => {
   const dir = await mkdtemp(join(tmpdir(), "code-dance-api-sampling-test-"));
   const storage = createSqliteStorage({ dbPath: join(dir, "api.sqlite") });
@@ -666,6 +784,7 @@ test("api deletes repository with active analysis by aborting the task and clean
   await mkdir(repositoryPath);
 
   let abortedAnalysisId: string | null = null;
+  const deletionGate = createDeferred<void>();
   const app = createServer({
     storage,
     probeLocalRepositoryImpl: async (localPath) => ({
@@ -678,8 +797,9 @@ test("api deletes repository with active analysis by aborting the task and clean
       await new Promise<AnalyzeRepositoryHistoryOutput>((resolve, reject) => {
         input.abortSignal?.addEventListener(
           "abort",
-          () => {
+          async () => {
             abortedAnalysisId = input.analysisId;
+            await deletionGate.promise;
             reject(new AnalysisAbortedError());
           },
           { once: true },
@@ -714,7 +834,7 @@ test("api deletes repository with active analysis by aborting the task and clean
       method: "DELETE",
       url: `/api/repositories/${repository.id}`,
     });
-    assert.equal(deleteResponse.statusCode, 204);
+    assert.equal(deleteResponse.statusCode, 202);
     assert.equal(abortedAnalysisId, analysisId);
 
     const repositoryListResponse = await app.inject({
@@ -724,19 +844,37 @@ test("api deletes repository with active analysis by aborting the task and clean
     assert.equal(repositoryListResponse.statusCode, 200);
     assert.equal(repositoryListResponse.json().length, 0);
 
-    const analysisResponseAfterDelete = await app.inject({
-      method: "GET",
-      url: `/api/analyses/${analysisId}`,
-    });
-    assert.equal(analysisResponseAfterDelete.statusCode, 404);
-
-    const summariesResponse = await app.inject({
+    const summariesWhileDeletingResponse = await app.inject({
       method: "GET",
       url: "/api/analysis-summaries",
     });
+    assert.equal(summariesWhileDeletingResponse.statusCode, 200);
+    assert.equal(summariesWhileDeletingResponse.json().length, 0);
+
+    deletionGate.resolve();
+
+    const analysisResponseAfterDelete = await waitFor(
+      async () =>
+        app.inject({
+          method: "GET",
+          url: `/api/analyses/${analysisId}`,
+        }),
+      (response) => response.statusCode === 404,
+    );
+    assert.equal(analysisResponseAfterDelete.statusCode, 404);
+
+    const summariesResponse = await waitFor(
+      async () =>
+        app.inject({
+          method: "GET",
+          url: "/api/analysis-summaries",
+        }),
+      (response) => response.json().length === 0,
+    );
     assert.equal(summariesResponse.statusCode, 200);
     assert.equal(summariesResponse.json().length, 0);
   } finally {
+    deletionGate.resolve();
     await app.close();
     await rm(dir, { recursive: true, force: true });
   }
@@ -1020,7 +1158,10 @@ test("api resumes interrupted analyses on server startup", async () => {
 
   try {
     await app.ready();
-    assert.equal(resumedRuns, 1);
+    await waitFor(
+      async () => resumedRuns,
+      (count) => count === 1,
+    );
     assert.deepEqual(resumedPerformance, {
       fileReadConcurrency: 5,
       analyzerConcurrency: 2,

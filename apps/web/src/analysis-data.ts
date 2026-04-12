@@ -7,6 +7,9 @@ import type {
   SeriesResponseDto,
 } from "@code-dance/contracts";
 
+import { formatMetricLabel as formatMetricLabelText } from "./display";
+import { formatNumberValue, translate } from "./i18n";
+
 export type MetricKey = "loc" | "added" | "deleted" | "churn";
 
 export type MetricModuleSeries = {
@@ -25,19 +28,44 @@ export type RankingEntry = {
   value: number;
 };
 
-const metricLabelMap: Record<MetricKey, string> = {
-  loc: "LOC",
-  added: "新增",
-  deleted: "删除",
-  churn: "变更量",
+export type LifecycleStage = "new" | "growth" | "stable" | "decline" | "dormant";
+
+export type RiskScatterPoint = {
+  key: string;
+  name: string;
+  kind: string;
+  latestLoc: number;
+  latestChurn: number;
+  recentAverageChurn: number;
+  peakChurn: number;
+  sizeMetric: number;
+};
+
+export type LifecycleModuleEntry = {
+  key: string;
+  name: string;
+  kind: string;
+  stage: LifecycleStage;
+  firstActiveIndex: number;
+  lastActiveIndex: number;
+  activeSpan: number;
+  latestLoc: number;
+  peakLoc: number;
+  recentTrend: number;
+};
+
+export type CalendarHeatEntry = {
+  date: string;
+  value: number;
+  snapshotCount: number;
 };
 
 export function formatMetricLabel(metric: MetricKey): string {
-  return metricLabelMap[metric];
+  return formatMetricLabelText(metric);
 }
 
 export function formatMetricValue(value: number): string {
-  return new Intl.NumberFormat("zh-CN").format(value);
+  return formatNumberValue(value);
 }
 
 export function getTimeline(analysis: AnalysisResultDto): string[] {
@@ -174,7 +202,7 @@ export function buildStackedAreaSeries(
   if (hiddenModules.length > 0) {
     resultModules.push({
       key: "others",
-      name: "Others",
+      name: translate("label.others"),
       values: xAxis.map((_, index) =>
         hiddenModules.reduce((sum, module) => sum + (module.values[index] ?? 0), 0),
       ),
@@ -266,7 +294,7 @@ export function buildStackedAreaSeriesFromQuery(
   if (hiddenModules.length > 0) {
     resultModules.push({
       key: "others",
-      name: "Others",
+      name: translate("label.others"),
       values: xAxis.map((_, index) =>
         hiddenModules.reduce((sum, module) => sum + (module.values[index] ?? 0), 0),
       ),
@@ -334,26 +362,40 @@ export function buildHeatmapSeriesFromQuery(
   xAxis: string[];
   yAxis: string[];
   maxValue: number;
-  data: Array<[number, number, number]>;
+  visualMax: number;
+  data: Array<[number, number, number, number]>;
 } {
   const { xAxis, modules } = buildMetricSeriesFromQuery(series);
   const visibleModules =
     visibleLimit === "all" ? modules : modules.slice(0, Math.max(1, visibleLimit));
   const yAxis = visibleModules.map((module) => module.name);
-  const data: Array<[number, number, number]> = [];
+  const data: Array<[number, number, number, number]> = [];
   let maxValue = 0;
+  const nonZeroValues: number[] = [];
 
   for (const [yIndex, module] of visibleModules.entries()) {
     for (const [xIndex, value] of module.values.entries()) {
-      data.push([xIndex, yIndex, value]);
+      const visualValue = value > 0 ? Math.log10(value + 1) : 0;
+      data.push([xIndex, yIndex, visualValue, value]);
       maxValue = Math.max(maxValue, value);
+      if (value > 0) {
+        nonZeroValues.push(value);
+      }
     }
   }
+
+  nonZeroValues.sort((left, right) => left - right);
+  const percentileIndex =
+    nonZeroValues.length > 0 ? Math.max(0, Math.ceil(nonZeroValues.length * 0.95) - 1) : 0;
+  const percentileValue = nonZeroValues[percentileIndex] ?? 0;
+  const visualMax =
+    percentileValue > 0 ? Math.log10(percentileValue + 1) : maxValue > 0 ? Math.log10(maxValue + 1) : 1;
 
   return {
     xAxis,
     yAxis,
     maxValue,
+    visualMax,
     data,
   };
 }
@@ -461,5 +503,141 @@ export function buildBumpChartSeriesFromQuery(
         bestRank: ranks.reduce((best, rank) => Math.min(best, rank), Number.POSITIVE_INFINITY),
       };
     }),
+  };
+}
+
+function average(values: number[]) {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+export function buildRiskScatterDataFromQuery(
+  locSeries: SeriesResponseDto,
+  churnSeries: SeriesResponseDto,
+  visibleLimit: number | "all",
+) {
+  const { modules: locModules } = buildMetricSeriesFromQuery(locSeries);
+  const { modules: churnModules } = buildMetricSeriesFromQuery(churnSeries);
+  const churnByModule = new Map(churnModules.map((module) => [module.key, module]));
+  const visibleModules =
+    visibleLimit === "all" ? locModules : locModules.slice(0, Math.max(1, visibleLimit));
+
+  return visibleModules.map((module) => {
+    const churnModule = churnByModule.get(module.key);
+    const churnValues = churnModule?.values ?? [];
+    const recentWindow = churnValues.slice(Math.max(0, churnValues.length - 3));
+    const latestChurn = churnValues.at(-1) ?? 0;
+    const recentAverageChurn = average(recentWindow);
+    const peakChurn = churnValues.reduce((peak, value) => Math.max(peak, value), 0);
+
+    return {
+      key: module.key,
+      name: module.name,
+      kind: module.kind,
+      latestLoc: module.latestValue,
+      latestChurn,
+      recentAverageChurn,
+      peakChurn,
+      sizeMetric: Math.max(recentAverageChurn, latestChurn, 1),
+    } satisfies RiskScatterPoint;
+  });
+}
+
+function computeLifecycleStage(values: number[], firstActiveIndex: number, lastActiveIndex: number) {
+  const latestLoc = values.at(-1) ?? 0;
+  const peakLoc = values.reduce((peak, value) => Math.max(peak, value), 0);
+
+  if (peakLoc <= 0 || latestLoc <= Math.max(1, peakLoc * 0.05)) {
+    return "dormant" as const;
+  }
+
+  const activeSpan = lastActiveIndex - firstActiveIndex + 1;
+  if (activeSpan <= 2 || firstActiveIndex >= Math.max(0, values.length - 2)) {
+    return "new" as const;
+  }
+
+  const recentWindow = values.slice(Math.max(0, values.length - 3));
+  const previousWindow = values.slice(Math.max(0, values.length - 6), Math.max(0, values.length - 3));
+  const recentAverage = average(recentWindow);
+  const previousAverage = previousWindow.length > 0 ? average(previousWindow) : recentAverage;
+  const trendDelta = recentAverage - previousAverage;
+  const baseline = Math.max(peakLoc, 1);
+
+  if (trendDelta >= baseline * 0.08) {
+    return "growth" as const;
+  }
+
+  if (trendDelta <= baseline * -0.08) {
+    return "decline" as const;
+  }
+
+  return "stable" as const;
+}
+
+export function buildLifecycleSeriesFromQuery(series: SeriesResponseDto) {
+  const { modules } = buildMetricSeriesFromQuery(series);
+
+  return modules.map((module) => {
+    const firstActiveIndex = module.values.findIndex((value) => value > 0);
+    const lastActiveIndex = (() => {
+      for (let index = module.values.length - 1; index >= 0; index -= 1) {
+        if ((module.values[index] ?? 0) > 0) {
+          return index;
+        }
+      }
+
+      return -1;
+    })();
+    const safeFirstActiveIndex = firstActiveIndex >= 0 ? firstActiveIndex : 0;
+    const safeLastActiveIndex = lastActiveIndex >= 0 ? lastActiveIndex : 0;
+    const recentWindow = module.values.slice(Math.max(0, module.values.length - 3));
+    const previousWindow = module.values.slice(Math.max(0, module.values.length - 6), Math.max(0, module.values.length - 3));
+
+    return {
+      key: module.key,
+      name: module.name,
+      kind: module.kind,
+      stage: computeLifecycleStage(module.values, safeFirstActiveIndex, safeLastActiveIndex),
+      firstActiveIndex: safeFirstActiveIndex,
+      lastActiveIndex: safeLastActiveIndex,
+      activeSpan: Math.max(0, safeLastActiveIndex - safeFirstActiveIndex + 1),
+      latestLoc: module.latestValue,
+      peakLoc: module.peakValue,
+      recentTrend:
+        average(recentWindow) -
+        (previousWindow.length > 0 ? average(previousWindow) : average(recentWindow)),
+    } satisfies LifecycleModuleEntry;
+  });
+}
+
+export function buildCalendarHeatmapFromQuery(series: SeriesResponseDto) {
+  const totalsByDate = new Map<string, { value: number; snapshotCount: number }>();
+
+  for (const [index, snapshot] of series.timeline.entries()) {
+    const date = snapshot.ts.slice(0, 10);
+    const current = totalsByDate.get(date) ?? { value: 0, snapshotCount: 0 };
+    const totalValue = series.series.reduce((sum, module) => sum + (module.values[index] ?? 0), 0);
+
+    totalsByDate.set(date, {
+      value: current.value + totalValue,
+      snapshotCount: current.snapshotCount + 1,
+    });
+  }
+
+  const entries = Array.from(totalsByDate.entries())
+    .map(([date, value]) => ({
+      date,
+      value: value.value,
+      snapshotCount: value.snapshotCount,
+    }))
+    .sort((left, right) => left.date.localeCompare(right.date));
+
+  return {
+    entries: entries satisfies CalendarHeatEntry[],
+    years: Array.from(new Set(entries.map((entry) => entry.date.slice(0, 4)))),
+    maxValue: entries.reduce((max, entry) => Math.max(max, entry.value), 0),
   };
 }

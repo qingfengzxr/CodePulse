@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 
 import * as echarts from "echarts";
 
@@ -9,29 +9,34 @@ import {
   formatMetricValue,
   type MetricKey,
 } from "../analysis-data";
+import { useI18n } from "../i18n";
 import { useThemeMode } from "../theme";
 import { axisStyle, baseGrid, createBaseChart, createBaseTooltip, getChartTokens } from "./chart-helpers";
 
 type ModuleRankingChartProps = {
-  analysisId: string;
-};
-
-type ApiError = {
-  error: string;
-  message: string;
+  ranking: RankingResponseDto | null;
+  metric: MetricKey;
+  visibleCount: 8 | 16;
+  onMetricChange: (metric: MetricKey) => void;
+  onVisibleCountChange: (count: 8 | 16) => void;
+  showHeader?: boolean;
 };
 
 const rankingMetrics: MetricKey[] = ["loc", "added", "deleted", "churn"];
 
-export function ModuleRankingChart({ analysisId }: ModuleRankingChartProps) {
+export function ModuleRankingChart({
+  ranking,
+  metric,
+  visibleCount,
+  onMetricChange,
+  onVisibleCountChange,
+  showHeader = true,
+}: ModuleRankingChartProps) {
+  const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.EChartsType | null>(null);
   const themeMode = useThemeMode();
-  const [metric, setMetric] = useState<MetricKey>("loc");
-  const [visibleCount, setVisibleCount] = useState<8 | 16>(8);
-  const [rankingResponse, setRankingResponse] = useState<RankingResponseDto | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const ranking = rankingResponse ? buildCurrentRankingFromQuery(rankingResponse) : [];
+  const rankingItems = ranking ? buildCurrentRankingFromQuery(ranking) : [];
 
   useEffect(() => {
     if (!containerRef.current) {
@@ -51,43 +56,6 @@ export function ModuleRankingChart({ analysisId }: ModuleRankingChartProps) {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function loadRanking() {
-      setError(null);
-
-      try {
-        const query = new URLSearchParams({
-          analysisId,
-          metric,
-          snapshot: "latest",
-          limit: String(visibleCount),
-        });
-        const response = await fetch(`/api/ranking?${query.toString()}`);
-        if (!response.ok) {
-          const payload = (await response.json()) as ApiError;
-          throw new Error(payload.message);
-        }
-
-        const payload = (await response.json()) as RankingResponseDto;
-        if (!cancelled) {
-          setRankingResponse(payload);
-        }
-      } catch (requestError) {
-        if (!cancelled) {
-          setError(requestError instanceof Error ? requestError.message : "failed to load ranking");
-        }
-      }
-    }
-
-    void loadRanking();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [analysisId, metric, visibleCount]);
-
-  useEffect(() => {
     const chart = chartRef.current;
     const container = containerRef.current;
 
@@ -95,8 +63,14 @@ export function ModuleRankingChart({ analysisId }: ModuleRankingChartProps) {
       return;
     }
 
+    if (rankingItems.length === 0) {
+      chart.clear();
+      chart.resize();
+      return;
+    }
+
     const compact = container.clientWidth < 720;
-    const reversed = [...ranking].reverse();
+    const reversed = [...rankingItems].reverse();
     const tokens = getChartTokens();
 
     chart.setOption(
@@ -152,19 +126,19 @@ export function ModuleRankingChart({ analysisId }: ModuleRankingChartProps) {
     );
 
     chart.resize();
-  }, [metric, ranking, themeMode]);
+  }, [metric, rankingItems, themeMode]);
 
-  const total = ranking.reduce((sum, entry) => sum + entry.value, 0);
+  const total = rankingItems.reduce((sum, entry) => sum + entry.value, 0);
 
   return (
     <div className="chart-panel">
       <div className="chart-toolbar chart-toolbar-stacked">
-        <div>
-          <h3>当前时间点模块排行</h3>
-          <p className="chart-subtitle">
-            横向条形图适合回答“谁最大、谁最活跃”，这里直接读取 ranking 查询接口。
-          </p>
-        </div>
+        {showHeader ? (
+          <div>
+            <h3>{t("chart.ranking.title")}</h3>
+            <p className="chart-subtitle">{t("chart.ranking.description")}</p>
+          </div>
+        ) : null}
         <div className="chart-toolbar-inline">
           <div className="metric-switch">
             {rankingMetrics.map((candidate) => (
@@ -172,7 +146,7 @@ export function ModuleRankingChart({ analysisId }: ModuleRankingChartProps) {
                 aria-pressed={metric === candidate}
                 className={`chart-toggle-button ${metric === candidate ? "active" : ""}`}
                 key={candidate}
-                onClick={() => setMetric(candidate)}
+                onClick={() => onMetricChange(candidate)}
                 type="button"
               >
                 {formatMetricLabel(candidate)}
@@ -185,20 +159,22 @@ export function ModuleRankingChart({ analysisId }: ModuleRankingChartProps) {
                 aria-pressed={visibleCount === count}
                 className={`chart-toggle-button ${visibleCount === count ? "active" : ""}`}
                 key={count}
-                onClick={() => setVisibleCount(count as 8 | 16)}
+                onClick={() => onVisibleCountChange(count as 8 | 16)}
                 type="button"
               >
-                前 {count}
+                {t("chart.focus.top", { count: String(count) })}
               </button>
             ))}
           </div>
         </div>
       </div>
       <div className="chart-summary">
-        <span className="chart-chip">Top 合计 {formatMetricValue(total)}</span>
+        <span className="chart-chip">
+          {t("chart.ranking.summary.total", { value: formatMetricValue(total) })}
+        </span>
       </div>
       <div className="chart-surface chart-surface-tall" ref={containerRef} />
-      {error ? <p className="feedback error">{error}</p> : null}
+      {ranking ? null : <p className="feedback">{t("chart.empty.loadRanking")}</p>}
     </div>
   );
 }

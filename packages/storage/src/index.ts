@@ -87,6 +87,12 @@ export type AnalysisSummary = {
   latestSnapshot: SnapshotSummary | null;
 };
 
+export type AnalysisDetailSummary = AnalysisSummary & {
+  repository: RepositoryTarget | null;
+  modules: AnalysisModuleSummary[];
+  defaultModuleKeys: string[];
+};
+
 export interface RepositoryTargetStore {
   list(): Promise<RepositoryTarget[]>;
   create(repository: RepositoryTarget): Promise<RepositoryTarget>;
@@ -108,20 +114,34 @@ export interface AnalysisJobStore {
 
 export interface AnalysisResultQueryStore {
   listAnalysisSummaries(): Promise<AnalysisSummary[]>;
+  getAnalysisSummary(id: string): Promise<AnalysisSummary | null>;
+  getAnalysisDetailSummary(
+    id: string,
+    options?: { defaultModuleLimit?: number },
+  ): Promise<AnalysisDetailSummary | null>;
   listAnalysisResults(): Promise<AnalysisResult[]>;
   getAnalysisResult(id: string): Promise<AnalysisResult | null>;
+  getLatestCompletedAnalysis(
+    repositoryId: string,
+    sampling: AnalysisJob["sampling"],
+  ): Promise<AnalysisJob | null>;
   listSnapshots(analysisId: string): Promise<SnapshotSummary[]>;
   listMetricPoints(analysisId: string): Promise<MetricPoint[]>;
   listModuleCandles(analysisId: string): Promise<ModuleCandlePoint[]>;
   listModulesByAnalysis(analysisId: string): Promise<AnalysisModuleSummary[]>;
   queryCandles(input: {
     analysisId: string;
+    sampling?: AnalysisJob["sampling"];
+    all?: boolean;
     moduleKeys?: string[];
+    limit?: number;
   }): Promise<CandlesResult | null>;
   querySeries(input: {
     analysisId: string;
     metric: AnalysisMetric;
+    all?: boolean;
     moduleKeys?: string[];
+    limit?: number;
   }): Promise<SeriesResult | null>;
   queryDistribution(input: {
     analysisId: string;
@@ -301,6 +321,18 @@ export function createSqliteStorage(options?: { dbPath?: string }): SqliteStorag
       }
 
       const next = updater(current);
+      if (
+        next.repositoryId === current.repositoryId &&
+        next.branch === current.branch &&
+        next.sampling === current.sampling &&
+        next.status === current.status &&
+        next.createdAt === current.createdAt &&
+        next.finishedAt === current.finishedAt &&
+        next.errorMessage === current.errorMessage
+      ) {
+        return current;
+      }
+
       db.prepare(
         `update analysis_jobs
          set repository_id = @repository_id,
@@ -319,75 +351,32 @@ export function createSqliteStorage(options?: { dbPath?: string }): SqliteStorag
 
   const query: AnalysisResultQueryStore = {
     async listAnalysisSummaries() {
-      const rows = db
-        .prepare(
-          `select
-             j.id,
-             j.repository_id,
-             j.branch,
-             j.sampling,
-             j.status,
-             j.created_at,
-             j.finished_at,
-             j.error_message,
-             p.phase,
-             p.percent,
-             p.total_commits,
-             p.sampled_commits,
-             p.completed_snapshots,
-             p.current_commit,
-             p.current_module,
-             p.current_files,
-             p.processed_files,
-             p.eta_seconds,
-             p.started_at,
-             p.updated_at,
-             count(s.seq) as snapshot_count,
-             max(s.seq) as latest_snapshot_seq
-           from analysis_jobs j
-           left join analysis_progress p on p.analysis_id = j.id
-           left join snapshots s on s.analysis_id = j.id
-           group by
-             j.id,
-             j.repository_id,
-             j.branch,
-             j.sampling,
-             j.status,
-             j.created_at,
-             j.finished_at,
-             j.error_message,
-             p.phase,
-             p.percent,
-             p.total_commits,
-             p.sampled_commits,
-             p.completed_snapshots,
-             p.current_commit,
-             p.current_module,
-             p.current_files,
-             p.processed_files,
-             p.eta_seconds,
-             p.started_at,
-             p.updated_at
-           order by j.created_at desc`,
-        )
-        .all() as AnalysisSummaryRow[];
+      return readAnalysisSummaryRows(db).map(mapAnalysisSummaryRow);
+    },
+    async getAnalysisSummary(id) {
+      const row = readAnalysisSummaryRows(db, id)[0];
+      return row ? mapAnalysisSummaryRow(row) : null;
+    },
+    async getAnalysisDetailSummary(id, options) {
+      const summary = await this.getAnalysisSummary(id);
+      if (!summary) {
+        return null;
+      }
 
-      return rows.map((row) => {
-        const job = mapAnalysisJobRow(row);
-        const latestSnapshot =
-          row.latest_snapshot_seq === null
-            ? null
-            : resolveSnapshot(db, row.id, row.latest_snapshot_seq);
-
-        return {
-          job,
-          progress: row.phase
-            ? mapAnalysisProgressRow(row as AnalysisProgressRow)
-            : createFallbackProgress(job),
-          snapshotCount: row.snapshot_count,
-          latestSnapshot,
-        };
+      const repository = await repositories.getById(summary.job.repositoryId);
+      const modules = await this.listModulesByAnalysis(id);
+      const defaultModuleKeys = resolveDefaultModuleKeys(db, {
+        analysisId: id,
+        metric: "loc",
+        limit: options?.defaultModuleLimit ?? DEFAULT_DEFAULT_MODULE_LIMIT,
       });
+
+      return {
+        ...summary,
+        repository,
+        modules,
+        defaultModuleKeys,
+      };
     },
     async listAnalysisResults() {
       const jobs = await analysisJobs.list();
@@ -424,6 +413,19 @@ export function createSqliteStorage(options?: { dbPath?: string }): SqliteStorag
         points,
         candles,
       };
+    },
+    async getLatestCompletedAnalysis(repositoryId, sampling) {
+      const row = db
+        .prepare(
+          `select id, repository_id, branch, sampling, status, created_at, finished_at, error_message
+           from analysis_jobs
+           where repository_id = ? and sampling = ? and status = 'done'
+           order by created_at desc
+           limit 1`,
+        )
+        .get(repositoryId, sampling) as AnalysisJobRow | undefined;
+
+      return row ? mapAnalysisJobRow(row) : null;
     },
     async listSnapshots(analysisId) {
       const rows = db
@@ -480,7 +482,13 @@ export function createSqliteStorage(options?: { dbPath?: string }): SqliteStorag
         return null;
       }
 
-      const moduleKeys = input.moduleKeys && input.moduleKeys.length > 0 ? input.moduleKeys : null;
+      const moduleKeys = resolveRequestedModuleKeys(db, {
+        analysisId: input.analysisId,
+        metric: input.metric,
+        all: input.all,
+        moduleKeys: input.moduleKeys,
+        limit: input.limit,
+      });
       const rows = readSeriesRows(db, input.analysisId, moduleKeys);
       const seqToIndex = new Map(timeline.map((snapshot, index) => [snapshot.seq, index]));
       const grouped = new Map<
@@ -512,56 +520,38 @@ export function createSqliteStorage(options?: { dbPath?: string }): SqliteStorag
       };
     },
     async queryCandles(input) {
-      const timeline = await this.listSnapshots(input.analysisId);
       const analysis = await analysisJobs.getById(input.analysisId);
       if (!analysis) {
         return null;
       }
 
-      const moduleKeys = input.moduleKeys && input.moduleKeys.length > 0 ? input.moduleKeys : null;
-      const rows = readCandleRows(db, input.analysisId, moduleKeys);
-      const seqToIndex = new Map(timeline.map((snapshot, index) => [snapshot.seq, index]));
-      const grouped = new Map<
-        string,
-        {
-          moduleKey: string;
-          moduleName: string;
-          moduleKind: string;
-          values: Array<{ open: number; high: number; low: number; close: number }>;
+      const requestedSampling = input.sampling ?? analysis.sampling;
+      if (
+        analysis.sampling !== "per-commit" &&
+        (requestedSampling === "daily" || requestedSampling === "weekly" || requestedSampling === "monthly")
+      ) {
+        const perCommitAnalysis = findLatestCompletedAnalysisForAggregation(db, {
+          repositoryId: analysis.repositoryId,
+          branch: analysis.branch,
+          sampling: "per-commit",
+        });
+        if (perCommitAnalysis) {
+          const perCommitResult = buildCandlesResult(db, {
+            analysisId: perCommitAnalysis.id,
+            all: input.all,
+            moduleKeys: input.moduleKeys,
+            limit: input.limit,
+          });
+          return aggregateCandlesResult(perCommitResult, requestedSampling);
         }
-      >();
-
-      for (const row of rows) {
-        const item = grouped.get(row.module_key) ?? {
-          moduleKey: row.module_key,
-          moduleName: row.module_name,
-          moduleKind: row.module_kind,
-          values: Array.from({ length: timeline.length }, () => ({
-            open: 0,
-            high: 0,
-            low: 0,
-            close: 0,
-          })),
-        };
-        const index = seqToIndex.get(row.snapshot_seq);
-        if (index !== undefined) {
-          item.values[index] = {
-            open: row.open,
-            high: row.high,
-            low: row.low,
-            close: row.close,
-          };
-        }
-        grouped.set(row.module_key, item);
       }
 
-      return {
+      return buildCandlesResult(db, {
         analysisId: input.analysisId,
-        timeline,
-        series: Array.from(grouped.values()).sort((left, right) =>
-          left.moduleKey.localeCompare(right.moduleKey),
-        ),
-      };
+        all: input.all,
+        moduleKeys: input.moduleKeys,
+        limit: input.limit,
+      });
     },
     async queryDistribution(input) {
       const analysis = await analysisJobs.getById(input.analysisId);
@@ -591,21 +581,24 @@ export function createSqliteStorage(options?: { dbPath?: string }): SqliteStorag
       };
     },
     async queryRanking(input) {
-      const distribution = await this.queryDistribution({
-        analysisId: input.analysisId,
-        metric: input.metric,
-        snapshot: input.snapshot,
-      });
-      if (!distribution) {
+      const analysis = await analysisJobs.getById(input.analysisId);
+      if (!analysis) {
         return null;
       }
 
+      const snapshot = resolveSnapshot(db, input.analysisId, input.snapshot);
+      if (!snapshot) {
+        return null;
+      }
+
+      const rows = readDistributionRows(db, input.analysisId, input.metric, snapshot.seq, input.limit);
+
       return {
-        analysisId: distribution.analysisId,
-        metric: distribution.metric,
-        snapshot: distribution.snapshot,
+        analysisId: input.analysisId,
+        metric: input.metric,
+        snapshot,
         limit: input.limit,
-        items: distribution.items.slice(0, input.limit),
+        items: rows.map(mapMetricValueRow),
       };
     },
   };
@@ -815,19 +808,138 @@ function initializeSchema(db: Database.Database) {
     create index if not exists idx_analysis_jobs_created_at
       on analysis_jobs (created_at desc);
 
+    create index if not exists idx_analysis_jobs_repository_sampling_status_created_at
+      on analysis_jobs (repository_id, sampling, status, created_at desc);
+
     create index if not exists idx_snapshots_analysis_seq
       on snapshots (analysis_id, seq);
 
     create index if not exists idx_module_metrics_analysis_ts
       on module_metrics (analysis_id, ts, module_key);
 
+    create index if not exists idx_module_metrics_analysis_snapshot_module
+      on module_metrics (analysis_id, snapshot_seq, module_key);
+
+    create index if not exists idx_module_metrics_analysis_module_snapshot
+      on module_metrics (analysis_id, module_key, snapshot_seq);
+
     create index if not exists idx_module_candles_analysis_ts
       on module_candles (analysis_id, ts, module_key);
+
+    create index if not exists idx_module_candles_analysis_snapshot_module
+      on module_candles (analysis_id, snapshot_seq, module_key);
+
+    create index if not exists idx_module_candles_analysis_module_snapshot
+      on module_candles (analysis_id, module_key, snapshot_seq);
   `);
 }
 
+function readAnalysisSummaryRows(db: Database.Database, analysisId?: string) {
+  const params: Array<string> = [];
+  const whereClause = analysisId ? "where j.id = ?" : "";
+  if (analysisId) {
+    params.push(analysisId);
+  }
+
+  const rows = db
+    .prepare(
+      `with snapshot_counts as (
+         select analysis_id, count(*) as snapshot_count
+         from snapshots
+         group by analysis_id
+       ),
+       latest_snapshots as (
+         select s.analysis_id, s.seq, s.commit_hash, s.ts
+         from snapshots s
+         inner join (
+           select analysis_id, max(seq) as seq
+           from snapshots
+           group by analysis_id
+         ) latest on latest.analysis_id = s.analysis_id and latest.seq = s.seq
+       )
+       select
+         j.id,
+         j.repository_id,
+         j.branch,
+         j.sampling,
+         j.status,
+         j.created_at,
+         j.finished_at,
+         j.error_message,
+         p.phase,
+         p.percent,
+         p.total_commits,
+         p.sampled_commits,
+         p.completed_snapshots,
+         p.current_commit,
+         p.current_module,
+         p.current_files,
+         p.processed_files,
+         p.eta_seconds,
+         p.started_at,
+         p.updated_at,
+         coalesce(sc.snapshot_count, 0) as snapshot_count,
+         ls.seq as latest_snapshot_seq,
+         ls.commit_hash as latest_snapshot_commit,
+         ls.ts as latest_snapshot_ts
+       from analysis_jobs j
+       left join analysis_progress p on p.analysis_id = j.id
+       left join snapshot_counts sc on sc.analysis_id = j.id
+       left join latest_snapshots ls on ls.analysis_id = j.id
+       ${whereClause}
+       order by j.created_at desc`,
+    )
+    .all(...params) as AnalysisSummaryRow[];
+
+  return rows;
+}
+
+const DEFAULT_DEFAULT_MODULE_LIMIT = 16;
+
+function resolveRequestedModuleKeys(
+  db: Database.Database,
+  input: {
+    analysisId: string;
+    metric: AnalysisMetric;
+    all?: boolean;
+    moduleKeys?: string[];
+    limit?: number;
+  },
+) {
+  if (input.all) {
+    return null;
+  }
+
+  if (input.moduleKeys && input.moduleKeys.length > 0) {
+    return input.moduleKeys;
+  }
+
+  return resolveDefaultModuleKeys(db, {
+    analysisId: input.analysisId,
+    metric: input.metric,
+    limit: input.limit ?? DEFAULT_DEFAULT_MODULE_LIMIT,
+  });
+}
+
+function resolveDefaultModuleKeys(
+  db: Database.Database,
+  input: {
+    analysisId: string;
+    metric: AnalysisMetric;
+    limit: number;
+  },
+) {
+  const snapshot = resolveSnapshot(db, input.analysisId, "latest");
+  if (!snapshot) {
+    return [] as string[];
+  }
+
+  const rows = readDistributionRows(db, input.analysisId, input.metric, snapshot.seq, input.limit);
+  return rows.map((row) => row.module_key);
+}
+
 function readSeriesRows(db: Database.Database, analysisId: string, moduleKeys: string[] | null) {
-  if (!moduleKeys || moduleKeys.length === 0) {
+  if (!moduleKeys) {
     return db
       .prepare(
         `select snapshot_seq, module_key, module_name, module_kind, loc, added, deleted, churn
@@ -836,6 +948,10 @@ function readSeriesRows(db: Database.Database, analysisId: string, moduleKeys: s
          order by module_key asc, snapshot_seq asc`,
       )
       .all(analysisId) as SeriesRow[];
+  }
+
+  if (moduleKeys.length === 0) {
+    return [] as SeriesRow[];
   }
 
   const placeholders = moduleKeys.map(() => "?").join(", ");
@@ -850,7 +966,7 @@ function readSeriesRows(db: Database.Database, analysisId: string, moduleKeys: s
 }
 
 function readCandleRows(db: Database.Database, analysisId: string, moduleKeys: string[] | null) {
-  if (!moduleKeys || moduleKeys.length === 0) {
+  if (!moduleKeys) {
     return db
       .prepare(
         `select snapshot_seq, module_key, module_name, module_kind, open, high, low, close
@@ -859,6 +975,10 @@ function readCandleRows(db: Database.Database, analysisId: string, moduleKeys: s
          order by module_key asc, snapshot_seq asc`,
       )
       .all(analysisId) as CandleSeriesRow[];
+  }
+
+  if (moduleKeys.length === 0) {
+    return [] as CandleSeriesRow[];
   }
 
   const placeholders = moduleKeys.map(() => "?").join(", ");
@@ -870,6 +990,207 @@ function readCandleRows(db: Database.Database, analysisId: string, moduleKeys: s
        order by module_key asc, snapshot_seq asc`,
     )
     .all(analysisId, ...moduleKeys) as CandleSeriesRow[];
+}
+
+function buildCandlesResult(
+  db: Database.Database,
+  input: {
+    analysisId: string;
+    all?: boolean;
+    moduleKeys?: string[];
+    limit?: number;
+  },
+): CandlesResult {
+  const timeline = db
+    .prepare(
+      `select seq, commit_hash, ts
+       from snapshots
+       where analysis_id = ?
+       order by seq asc`,
+    )
+    .all(input.analysisId) as SnapshotRow[];
+  const moduleKeys = resolveRequestedModuleKeys(db, {
+    analysisId: input.analysisId,
+    metric: "loc",
+    all: input.all,
+    moduleKeys: input.moduleKeys,
+    limit: input.limit,
+  });
+  const rows = readCandleRows(db, input.analysisId, moduleKeys);
+  const seqToIndex = new Map(timeline.map((snapshot, index) => [snapshot.seq, index]));
+  const grouped = new Map<
+    string,
+    {
+      moduleKey: string;
+      moduleName: string;
+      moduleKind: string;
+      values: Array<{ open: number; high: number; low: number; close: number }>;
+    }
+  >();
+
+  for (const row of rows) {
+    const item = grouped.get(row.module_key) ?? {
+      moduleKey: row.module_key,
+      moduleName: row.module_name,
+      moduleKind: row.module_kind,
+      values: Array.from({ length: timeline.length }, () => ({
+        open: 0,
+        high: 0,
+        low: 0,
+        close: 0,
+      })),
+    };
+    const index = seqToIndex.get(row.snapshot_seq);
+    if (index !== undefined) {
+      item.values[index] = {
+        open: row.open,
+        high: row.high,
+        low: row.low,
+        close: row.close,
+      };
+    }
+    grouped.set(row.module_key, item);
+  }
+
+  return {
+    analysisId: input.analysisId,
+    timeline: timeline.map(mapSnapshotSummaryRow),
+    series: Array.from(grouped.values()).sort((left, right) =>
+      left.moduleKey.localeCompare(right.moduleKey),
+    ),
+  };
+}
+
+function findLatestCompletedAnalysisForAggregation(
+  db: Database.Database,
+  input: {
+    repositoryId: string;
+    branch: string;
+    sampling: AnalysisJob["sampling"];
+  },
+): AnalysisJob | null {
+  const row = db
+    .prepare(
+      `select id, repository_id, branch, sampling, status, created_at, finished_at, error_message
+       from analysis_jobs
+       where repository_id = ? and branch = ? and sampling = ? and status = 'done'
+       order by created_at desc
+       limit 1`,
+    )
+    .get(input.repositoryId, input.branch, input.sampling) as AnalysisJobRow | undefined;
+
+  return row ? mapAnalysisJobRow(row) : null;
+}
+
+function aggregateCandlesResult(
+  input: CandlesResult,
+  sampling: "daily" | "weekly" | "monthly",
+): CandlesResult {
+  if (input.timeline.length === 0) {
+    return input;
+  }
+
+  const groups = new Map<
+    string,
+    {
+      key: string;
+      snapshotIndexes: number[];
+      lastSnapshot: SnapshotSummary;
+    }
+  >();
+
+  for (const [index, snapshot] of input.timeline.entries()) {
+    const key = toSamplingBucketKey(snapshot.ts, sampling);
+    const current = groups.get(key);
+    if (current) {
+      current.snapshotIndexes.push(index);
+      current.lastSnapshot = snapshot;
+      continue;
+    }
+
+    groups.set(key, {
+      key,
+      snapshotIndexes: [index],
+      lastSnapshot: snapshot,
+    });
+  }
+
+  const orderedGroups = Array.from(groups.values());
+  const aggregatedTimeline = orderedGroups.map((group, index) => ({
+    seq: index + 1,
+    commit: group.lastSnapshot.commit,
+    ts: group.lastSnapshot.ts,
+  }));
+
+  return {
+    analysisId: input.analysisId,
+    timeline: aggregatedTimeline,
+    series: input.series.map((series) => ({
+      moduleKey: series.moduleKey,
+      moduleName: series.moduleName,
+      moduleKind: series.moduleKind,
+      values: orderedGroups.map((group) => {
+        const observed = group.snapshotIndexes.map((snapshotIndex) => series.values[snapshotIndex] ?? zeroCandle());
+        const first = observed[0] ?? zeroCandle();
+        const last = observed[observed.length - 1] ?? zeroCandle();
+
+        return {
+          open: first.open,
+          high: observed.reduce((max, candle) => Math.max(max, candle.high), 0),
+          low: observed.reduce((min, candle) => Math.min(min, candle.low), Number.POSITIVE_INFINITY),
+          close: last.close,
+        };
+      }),
+    })),
+  };
+}
+
+function zeroCandle() {
+  return {
+    open: 0,
+    high: 0,
+    low: 0,
+    close: 0,
+  };
+}
+
+function toSamplingBucketKey(ts: string, sampling: "daily" | "weekly" | "monthly") {
+  switch (sampling) {
+    case "daily":
+      return ts.slice(0, 10);
+    case "monthly":
+      return ts.slice(0, 7);
+    case "weekly":
+    default: {
+      const date = new Date(ts);
+      const weekDate = new Date(
+        Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+      );
+      const day = weekDate.getUTCDay() || 7;
+      weekDate.setUTCDate(weekDate.getUTCDate() + 4 - day);
+      const yearStart = new Date(Date.UTC(weekDate.getUTCFullYear(), 0, 1));
+      const weekNumber = Math.ceil(((weekDate.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+      return `${weekDate.getUTCFullYear()}-W${String(weekNumber).padStart(2, "0")}`;
+    }
+  }
+}
+
+function readDistributionRows(
+  db: Database.Database,
+  analysisId: string,
+  metric: AnalysisMetric,
+  snapshotSeq: number,
+  limit: number,
+) {
+  return db
+    .prepare(
+      `select module_key, module_name, module_kind, ${metric} as value
+       from module_metrics
+       where analysis_id = ? and snapshot_seq = ?
+       order by value desc, module_key asc
+       limit ?`,
+    )
+    .all(analysisId, snapshotSeq, limit) as MetricValueRow[];
 }
 
 function resolveSnapshot(
@@ -1067,6 +1388,23 @@ function mapAnalysisModuleRow(row: AnalysisModuleRow): AnalysisModuleSummary {
   };
 }
 
+function mapAnalysisSummaryRow(row: AnalysisSummaryRow): AnalysisSummary {
+  const job = mapAnalysisJobRow(row);
+  return {
+    job,
+    progress: row.phase ? mapAnalysisProgressRow(row as AnalysisProgressRow) : createFallbackProgress(job),
+    snapshotCount: row.snapshot_count,
+    latestSnapshot:
+      row.latest_snapshot_seq === null
+        ? null
+        : {
+            seq: row.latest_snapshot_seq,
+            commit: row.latest_snapshot_commit ?? "",
+            ts: row.latest_snapshot_ts ?? "",
+          },
+  };
+}
+
 function mapMetricValueRow(row: MetricValueRow) {
   return {
     moduleKey: row.module_key,
@@ -1123,6 +1461,8 @@ type AnalysisSummaryRow = AnalysisJobRow &
   Partial<AnalysisProgressRow> & {
     snapshot_count: number;
     latest_snapshot_seq: number | null;
+    latest_snapshot_commit: string | null;
+    latest_snapshot_ts: string | null;
   };
 
 type SnapshotRow = {

@@ -2,12 +2,12 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import type {
-  AnalysisModuleSummaryDto,
+  AnalysisDetailSummaryDto,
   AnalysisResultDto,
   AnalysisSamplingDto,
   AnalysisSummaryDto,
   CandlesResponseDto,
-  DistributionResponseDto,
+  RankingResponseDto,
   RepositoryTargetDto,
   SeriesResponseDto,
 } from "@code-dance/contracts";
@@ -16,24 +16,29 @@ import {
   buildTotalLocSeriesFromQuery,
   formatMetricValue,
   getLatestSnapshotFromSeries,
-  getTotalDistributionValue,
   type MetricKey,
 } from "./analysis-data";
 import { ModuleBumpChart } from "./charts/ModuleBumpChart";
+import { ModuleCalendarHeatmapChart } from "./charts/ModuleCalendarHeatmapChart";
 import { ModuleCandlestickChart } from "./charts/ModuleCandlestickChart";
 import { ModuleChurnHeatmapChart } from "./charts/ModuleChurnHeatmapChart";
+import { ModuleLifecycleChart } from "./charts/ModuleLifecycleChart";
 import { ModuleRankingChart } from "./charts/ModuleRankingChart";
+import { ModuleRiskScatterChart } from "./charts/ModuleRiskScatterChart";
 import { ModuleShareStackedAreaChart } from "./charts/ModuleShareStackedAreaChart";
 import { ModuleStackedAreaChart } from "./charts/ModuleStackedAreaChart";
 import { ModuleTrendChart } from "./charts/ModuleTrendChart";
 import { RepositoryScaleChart } from "./charts/RepositoryScaleChart";
 import { ProgressBar } from "./ProgressBar";
+import { formatProgressPhase } from "./display";
+import { useI18n } from "./i18n";
 import { getSamplingLabel, samplingOptions } from "./sampling";
+import { usePageQueryCache } from "./use-page-query-cache";
 
 type AnalysisDetailPageProps = {
-  analyses: Record<string, AnalysisResultDto | undefined>;
   analysisSummaries: Record<string, AnalysisSummaryDto | undefined>;
-  onRefreshAnalysis: (analysisId: string) => Promise<void> | void;
+  onRefreshAnalysisDetailSummary: (analysisId: string) => Promise<AnalysisDetailSummaryDto | null>;
+  onRefreshAnalysisSummary: (analysisId: string) => Promise<AnalysisSummaryDto | null>;
   onRunAnalysis: (
     repository: RepositoryTargetDto,
     sampling?: AnalysisSamplingDto,
@@ -44,13 +49,6 @@ type AnalysisDetailPageProps = {
 type ApiError = {
   error: string;
   message: string;
-};
-
-type AnalysisDetailQueryState = {
-  modules: AnalysisModuleSummaryDto[];
-  candles: CandlesResponseDto | null;
-  seriesByMetric: Partial<Record<MetricKey, SeriesResponseDto>>;
-  distributionsByMetric: Partial<Record<MetricKey, DistributionResponseDto>>;
 };
 
 type ChartCard = {
@@ -64,144 +62,312 @@ type ChartCard = {
 };
 
 const metrics: MetricKey[] = ["loc", "added", "deleted", "churn"];
+const chartOrder = [
+  "repo-scale",
+  "stacked-area",
+  "share-stacked-area",
+  "lifecycle",
+  "ranking",
+  "churn-heatmap",
+  "risk-scatter",
+  "calendar-heatmap",
+  "candlestick",
+  "bump-chart",
+  "trend",
+] as const;
 
 export function AnalysisDetailPage({
-  analyses,
   analysisSummaries,
-  onRefreshAnalysis,
+  onRefreshAnalysisDetailSummary,
+  onRefreshAnalysisSummary,
   onRunAnalysis,
   repositories,
 }: AnalysisDetailPageProps) {
+  const { t, formatDate, formatNumber } = useI18n();
   const navigate = useNavigate();
   const { analysisId } = useParams();
-  const analysis = analysisId ? analyses[analysisId] : undefined;
-  const [queryState, setQueryState] = useState<AnalysisDetailQueryState | null>(null);
-  const [queryLoading, setQueryLoading] = useState(false);
+  const analysisSummary = analysisId ? analysisSummaries[analysisId] : undefined;
+  const queryCache = usePageQueryCache();
   const [queryError, setQueryError] = useState<string | null>(null);
+  const [detailSummary, setDetailSummary] = useState<AnalysisDetailSummaryDto | null>(null);
   const [activeChartIndex, setActiveChartIndex] = useState(0);
+  const [rankingMetric, setRankingMetric] = useState<MetricKey>("loc");
+  const [rankingVisibleCount, setRankingVisibleCount] = useState<8 | 16>(8);
   const [samplingActionLoading, setSamplingActionLoading] = useState<AnalysisSamplingDto | null>(
     null,
   );
+  const [detailRefreshToken, setDetailRefreshToken] = useState(0);
   const currentAnalysisId = analysisId ?? "";
 
   useEffect(() => {
-    if (!analysis && analysisId) {
-      void onRefreshAnalysis(analysisId);
-    }
-  }, [analysis, analysisId, onRefreshAnalysis]);
+    setActiveChartIndex(0);
+    setRankingMetric("loc");
+    setRankingVisibleCount(8);
+    setQueryError(null);
+    setDetailSummary(null);
+    queryCache.clear();
+  }, [currentAnalysisId, queryCache]);
 
   useEffect(() => {
-    if (!analysisId || !analysis || analysis.job.status !== "done") {
+    if (!currentAnalysisId) {
       return;
     }
 
-    let cancelled = false;
-
-    async function loadDetailQueries() {
-      setQueryLoading(true);
-      setQueryError(null);
-
-      try {
-        const moduleQuery = new URLSearchParams({ analysisId: currentAnalysisId });
-        const moduleResponse = fetch(`/api/modules?${moduleQuery.toString()}`);
-        const seriesResponses = metrics.map((metric) =>
-          fetch(
-            `/api/series?${new URLSearchParams({ analysisId: currentAnalysisId, metric }).toString()}`,
-          ),
-        );
-        const candlesResponse = fetch(`/api/candles?${moduleQuery.toString()}`);
-        const distributionResponses = metrics.map((metric) =>
-          fetch(
-            `/api/distribution?${new URLSearchParams({
-              analysisId: currentAnalysisId,
-              metric,
-              snapshot: "latest",
-            }).toString()}`,
-          ),
-        );
-
-        const responses = await Promise.all([
-          moduleResponse,
-          ...seriesResponses,
-          candlesResponse,
-          ...distributionResponses,
-        ]);
-
-        for (const response of responses) {
-          if (!response.ok) {
-            const payload = (await response.json()) as ApiError;
-            throw new Error(payload.message);
-          }
-        }
-
-        const modules = (await responses[0]!.json()) as AnalysisModuleSummaryDto[];
-        const seriesByMetric = Object.fromEntries(
-          await Promise.all(
-            metrics.map(async (metric, index) => [
-              metric,
-              (await responses[index + 1]!.json()) as SeriesResponseDto,
-            ]),
-          ),
-        ) as Partial<Record<MetricKey, SeriesResponseDto>>;
-        const candles = (await responses[1 + metrics.length]!.json()) as CandlesResponseDto;
-        const distributionsByMetric = Object.fromEntries(
-          await Promise.all(
-            metrics.map(async (metric, index) => [
-              metric,
-              (await responses[index + 2 + metrics.length]!.json()) as DistributionResponseDto,
-            ]),
-          ),
-        ) as Partial<Record<MetricKey, DistributionResponseDto>>;
-
-        if (!cancelled) {
-          setQueryState({
-            modules,
-            candles,
-            seriesByMetric,
-            distributionsByMetric,
-          });
-        }
-      } catch (requestError) {
-        if (!cancelled) {
-          setQueryError(
-            requestError instanceof Error
-              ? requestError.message
-              : "failed to load analysis detail data",
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setQueryLoading(false);
-        }
+    void onRefreshAnalysisDetailSummary(currentAnalysisId).then((summary) => {
+      if (summary && summary.job.id === currentAnalysisId) {
+        setDetailSummary(summary);
       }
+    });
+  }, [currentAnalysisId, detailRefreshToken, onRefreshAnalysisDetailSummary]);
+
+  useEffect(() => {
+    if (!currentAnalysisId || analysisSummary) {
+      return;
     }
 
-    void loadDetailQueries();
+    void onRefreshAnalysisSummary(currentAnalysisId);
+  }, [currentAnalysisId, analysisSummary, onRefreshAnalysisSummary]);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [analysis, currentAnalysisId, analysisId]);
+  useEffect(() => {
+    if (!analysisSummary || !detailSummary || analysisSummary.job.id !== detailSummary.job.id) {
+      return;
+    }
 
-  const currentAnalysis = analysis ?? null;
-  const repository = currentAnalysis
-    ? repositories.find((candidate) => candidate.id === currentAnalysis.job.repositoryId)
-    : undefined;
-  const locSeries = queryState?.seriesByMetric.loc;
+    setDetailSummary((current) =>
+      current && current.job.id === analysisSummary.job.id
+        ? current.job.status === analysisSummary.job.status &&
+          current.progress.phase === analysisSummary.progress.phase &&
+          current.progress.percent === analysisSummary.progress.percent &&
+          current.snapshotCount === analysisSummary.snapshotCount &&
+          current.latestSnapshot?.seq === analysisSummary.latestSnapshot?.seq
+          ? current
+          : {
+              ...current,
+              job: analysisSummary.job,
+              progress: analysisSummary.progress,
+              snapshotCount: analysisSummary.snapshotCount,
+              latestSnapshot: analysisSummary.latestSnapshot,
+            }
+        : current,
+    );
+  }, [analysisSummary, detailSummary]);
+
+  const defaultModuleKeys = detailSummary?.defaultModuleKeys ?? [];
+  const seriesQueryKey = (metric: MetricKey, moduleKeys?: string[] | null, all = false) =>
+    `series:${currentAnalysisId}:${metric}:${all ? "__all__" : moduleKeys === null ? "__default__" : (moduleKeys ?? []).join(",")}`;
+  const candlesQueryKey = (moduleKeys: string[], sampling?: AnalysisSamplingDto, all = false) =>
+    `candles:${currentAnalysisId}:${sampling ?? ""}:${all ? "__all__" : moduleKeys.join(",")}`;
+  const rankingQueryKey = (metric: MetricKey, limit: 8 | 16) =>
+    `ranking:${currentAnalysisId}:${metric}:${limit}`;
+
+  const loadSeries = async (metric: MetricKey, moduleKeys?: string[] | null, all = false) => {
+    if (!analysisId) {
+      return null;
+    }
+
+    const requestedModuleKeys = moduleKeys === undefined ? defaultModuleKeys : moduleKeys;
+
+    try {
+      return await queryCache.load(seriesQueryKey(metric, requestedModuleKeys, all), async () => {
+        const params = new URLSearchParams({ analysisId, metric });
+        if (all) {
+          params.set("all", "true");
+        } else if (requestedModuleKeys && requestedModuleKeys.length > 0) {
+          params.set("moduleKeys", requestedModuleKeys.join(","));
+        }
+        const response = await fetch(
+          `/api/series?${params.toString()}`,
+        );
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => null)) as ApiError | null;
+          throw new Error(payload?.message ?? `failed to load ${metric} series`);
+        }
+
+        const payload = (await response.json()) as SeriesResponseDto;
+        return payload;
+      });
+    } catch (requestError) {
+      setQueryError(
+        requestError instanceof Error ? requestError.message : t("feedback.errorFallback"),
+      );
+      return null;
+    }
+  };
+
+  const loadCandles = async (
+    moduleKeys = defaultModuleKeys,
+    sampling = detailSummary?.job.sampling,
+    all = false,
+  ) => {
+    if (!analysisId) {
+      return null;
+    }
+
+    try {
+      return await queryCache.load(candlesQueryKey(moduleKeys, sampling, all), async () => {
+        const params = new URLSearchParams({ analysisId });
+        if (sampling) {
+          params.set("sampling", sampling);
+        }
+        if (all) {
+          params.set("all", "true");
+        } else if (moduleKeys.length > 0) {
+          params.set("moduleKeys", moduleKeys.join(","));
+        }
+        const response = await fetch(`/api/candles?${params.toString()}`);
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => null)) as ApiError | null;
+          throw new Error(payload?.message ?? t("feedback.errorFallback"));
+        }
+
+        const payload = (await response.json()) as CandlesResponseDto;
+        return payload;
+      });
+    } catch (requestError) {
+      setQueryError(
+        requestError instanceof Error ? requestError.message : t("feedback.errorFallback"),
+      );
+      return null;
+    }
+  };
+
+  const loadRanking = async (metric: MetricKey, limit: 8 | 16) => {
+    if (!analysisId) {
+      return null;
+    }
+
+    try {
+      return await queryCache.load(rankingQueryKey(metric, limit), async () => {
+        const response = await fetch(
+          `/api/ranking?${new URLSearchParams({
+            analysisId,
+            metric,
+            snapshot: "latest",
+            limit: String(limit),
+          }).toString()}`,
+        );
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => null)) as ApiError | null;
+          throw new Error(payload?.message ?? t("feedback.errorFallback"));
+        }
+
+        const payload = (await response.json()) as RankingResponseDto;
+        return payload;
+      });
+    } catch (requestError) {
+      setQueryError(
+        requestError instanceof Error ? requestError.message : t("feedback.errorFallback"),
+      );
+      return null;
+    }
+  };
+
+  useEffect(() => {
+    if (!detailSummary || detailSummary.job.status !== "done") {
+      return;
+    }
+
+    void loadSeries("loc");
+  }, [currentAnalysisId, detailSummary?.job.status, defaultModuleKeys.join(","), detailRefreshToken]);
+
+  useEffect(() => {
+    if (!detailSummary || detailSummary.job.status !== "done") {
+      return;
+    }
+
+    const activeChartId = chartOrder[activeChartIndex];
+    if (activeChartId === "ranking") {
+      void loadRanking(rankingMetric, rankingVisibleCount);
+      return;
+    }
+
+    if (activeChartId === "candlestick") {
+      void loadCandles();
+      return;
+    }
+
+    if (activeChartId === "churn-heatmap") {
+      void loadSeries("churn");
+      return;
+    }
+
+    if (activeChartId === "risk-scatter") {
+      void Promise.all([loadSeries("loc"), loadSeries("churn")]);
+      return;
+    }
+
+    if (activeChartId === "calendar-heatmap") {
+      void loadSeries("churn", null, true);
+      return;
+    }
+
+    if (activeChartId === "lifecycle") {
+      void loadSeries("loc", null, true);
+      return;
+    }
+
+    if (activeChartId === "trend") {
+      void Promise.all(metrics.map((metric) => loadSeries(metric)));
+      return;
+    }
+
+    if (activeChartId === "bump-chart") {
+      void Promise.all((["loc", "churn"] as const).map((metric) => loadSeries(metric)));
+    }
+  }, [
+    currentAnalysisId,
+    activeChartIndex,
+    defaultModuleKeys.join(","),
+    detailRefreshToken,
+    detailSummary?.job.sampling,
+    detailSummary?.job.status,
+    rankingMetric,
+    rankingVisibleCount,
+  ]);
+
+  const currentAnalysis = detailSummary ?? null;
+  const repository = detailSummary?.repository ?? repositories.find((candidate) => candidate.id === currentAnalysis?.job.repositoryId);
+  const modules = detailSummary?.modules ?? [];
+  const locSeries = queryCache.get<SeriesResponseDto>(seriesQueryKey("loc", defaultModuleKeys)) ?? null;
+  const fullLocSeries = queryCache.get<SeriesResponseDto>(seriesQueryKey("loc", null, true)) ?? null;
+  const addedSeries =
+    queryCache.get<SeriesResponseDto>(seriesQueryKey("added", defaultModuleKeys)) ?? null;
+  const fullAddedSeries = queryCache.get<SeriesResponseDto>(seriesQueryKey("added", null, true)) ?? null;
+  const deletedSeries =
+    queryCache.get<SeriesResponseDto>(seriesQueryKey("deleted", defaultModuleKeys)) ?? null;
+  const fullDeletedSeries = queryCache.get<SeriesResponseDto>(seriesQueryKey("deleted", null, true)) ?? null;
+  const churnSeries =
+    queryCache.get<SeriesResponseDto>(seriesQueryKey("churn", defaultModuleKeys)) ?? null;
+  const fullChurnSeries = queryCache.get<SeriesResponseDto>(seriesQueryKey("churn", null, true)) ?? null;
+  const candles =
+    queryCache.get<CandlesResponseDto>(
+      candlesQueryKey(defaultModuleKeys, detailSummary?.job.sampling),
+    ) ?? null;
+  const fullCandles =
+    queryCache.get<CandlesResponseDto>(
+      candlesQueryKey(defaultModuleKeys, detailSummary?.job.sampling, true),
+    ) ?? null;
+  const rankingResponse =
+    queryCache.get<RankingResponseDto>(rankingQueryKey(rankingMetric, rankingVisibleCount)) ?? null;
+  const seriesByMetric: Partial<Record<MetricKey, SeriesResponseDto>> = {
+    loc: locSeries ?? undefined,
+    added: addedSeries ?? undefined,
+    deleted: deletedSeries ?? undefined,
+    churn: churnSeries ?? undefined,
+  };
+  const fullSeriesByMetric: Partial<Record<MetricKey, SeriesResponseDto>> = {
+    loc: fullLocSeries ?? undefined,
+    added: fullAddedSeries ?? undefined,
+    deleted: fullDeletedSeries ?? undefined,
+    churn: fullChurnSeries ?? undefined,
+  };
   const totalLocSeries = locSeries ? buildTotalLocSeriesFromQuery(locSeries) : null;
   const totalLoc = totalLocSeries?.values.at(-1) ?? 0;
   const peakLoc = totalLocSeries?.values.reduce((peak, value) => Math.max(peak, value), 0) ?? 0;
-  const latestSnapshot = locSeries ? getLatestSnapshotFromSeries(locSeries) : null;
-  const moduleCount = queryState?.modules.length ?? 0;
-  const totalAdded = queryState?.distributionsByMetric.added
-    ? getTotalDistributionValue(queryState.distributionsByMetric.added)
-    : 0;
-  const totalDeleted = queryState?.distributionsByMetric.deleted
-    ? getTotalDistributionValue(queryState.distributionsByMetric.deleted)
-    : 0;
-  const totalChurn = queryState?.distributionsByMetric.churn
-    ? getTotalDistributionValue(queryState.distributionsByMetric.churn)
-    : 0;
+  const latestSnapshot = locSeries ? getLatestSnapshotFromSeries(locSeries) : currentAnalysis?.latestSnapshot ?? null;
+  const moduleCount = modules.length;
+  const defaultModuleCount = locSeries?.series.length ?? 0;
+  const fullModuleCount = fullLocSeries?.series.length ?? null;
   const topModule = locSeries ? buildMetricSeriesFromQuery(locSeries).modules[0] : null;
   const siblingAnalysesBySampling = repository
     ? samplingOptions.map((sampling) => ({
@@ -214,112 +380,323 @@ export function AnalysisDetailPage({
     : [];
 
   const chartCards = useMemo<ChartCard[]>(() => {
-    const cards: ChartCard[] = [];
-
-    if (locSeries && currentAnalysis) {
-      cards.push({
+    return [
+      {
         id: "repo-scale",
-        tabLabel: "总览趋势",
-        category: "总览",
-        title: "仓库总 LOC 趋势",
-        description: "先只看整体规模，建立对长期增长和阶段跳变的直觉。",
-        summary: [`当前 ${formatMetricValue(totalLoc)}`, `峰值 ${formatMetricValue(peakLoc)}`],
-        content: <RepositoryScaleChart series={locSeries} />,
-      });
-
-      cards.push({
+        tabLabel: t("chart.tabs.repoScale"),
+        category: t("chart.focusCard.category.summary"),
+        title: t("chart.repoScale.title"),
+        description: t("chart.repoScale.description"),
+        summary: [
+          t("chart.repoScale.summary.current", { value: formatMetricValue(totalLoc) }),
+          t("chart.repoScale.summary.peak", { value: formatMetricValue(peakLoc) }),
+        ],
+        content: locSeries ? (
+          <RepositoryScaleChart series={locSeries} showHeader={false} />
+        ) : (
+          <div className="empty-state">
+            <strong>{t("chart.empty.waitOverview")}</strong>
+            <p>{t("chart.empty.loadOverview")}</p>
+          </div>
+        ),
+      },
+      {
         id: "stacked-area",
-        tabLabel: "结构变化",
-        category: "结构",
-        title: "模块堆叠面积图",
-        description: "看谁构成了当前结构，以及结构随时间如何迁移。",
-        summary: [`${locSeries.series.length} 个模块`, `${locSeries.timeline.length} 个采样点`],
-        content: <ModuleStackedAreaChart series={locSeries} />,
-      });
-
-      cards.push({
+        tabLabel: t("chart.tabs.stacked"),
+        category: t("chart.focusCard.category.structure"),
+        title: t("chart.stacked.title"),
+        description: t("chart.stacked.description"),
+        summary: [
+          fullModuleCount
+            ? t("chart.summary.loadedAll", { count: formatNumber(fullModuleCount) })
+            : t("chart.summary.loadedTop", { count: formatNumber(defaultModuleCount) }),
+          t("chart.summary.points", { count: formatNumber(locSeries?.timeline.length ?? 0) }),
+        ],
+        content: locSeries ? (
+          <ModuleStackedAreaChart
+            allSeries={fullLocSeries}
+            allSeriesLoading={queryCache.isPending(seriesQueryKey("loc", null, true))}
+            onRequestAllSeries={() => {
+              void loadSeries("loc", null, true);
+            }}
+            series={locSeries}
+            showHeader={false}
+          />
+        ) : (
+          <div className="empty-state">
+            <strong>{t("chart.empty.waitStructure")}</strong>
+            <p>{t("chart.empty.loadStructure")}</p>
+          </div>
+        ),
+      },
+      {
         id: "share-stacked-area",
-        tabLabel: "占比结构",
-        category: "结构",
-        title: "模块占比 100% 堆叠面积图",
-        description: "忽略绝对规模，只关注结构份额是如何变化的。",
-        summary: ["100% 归一化", `${locSeries.series.length} 个模块`],
-        content: <ModuleShareStackedAreaChart series={locSeries} />,
-      });
-
-      cards.push({
+        tabLabel: t("chart.tabs.share"),
+        category: t("chart.focusCard.category.structure"),
+        title: t("chart.share.title"),
+        description: t("chart.share.description"),
+        summary: [
+          t("chart.summary.normalized"),
+          fullModuleCount
+            ? t("chart.summary.loadedAll", { count: formatNumber(fullModuleCount) })
+            : t("chart.summary.loadedTop", { count: formatNumber(defaultModuleCount) }),
+        ],
+        content: locSeries ? (
+          <ModuleShareStackedAreaChart
+            allSeries={fullLocSeries}
+            allSeriesLoading={queryCache.isPending(seriesQueryKey("loc", null, true))}
+            onRequestAllSeries={() => {
+              void loadSeries("loc", null, true);
+            }}
+            series={locSeries}
+            showHeader={false}
+          />
+        ) : (
+          <div className="empty-state">
+            <strong>{t("chart.empty.waitShare")}</strong>
+            <p>{t("chart.empty.loadStructure")}</p>
+          </div>
+        ),
+      },
+      {
+        id: "lifecycle",
+        tabLabel: t("chart.tabs.lifecycle"),
+        category: t("chart.focusCard.category.trend"),
+        title: t("chart.lifecycle.title"),
+        description: t("chart.lifecycle.description"),
+        summary: [
+          fullLocSeries
+            ? t("chart.summary.loadedAll", { count: formatNumber(fullLocSeries.series.length) })
+            : t("chart.summary.loadedTop", { count: formatNumber(defaultModuleCount) }),
+          t("chart.lifecycle.summary.rules"),
+        ],
+        content: fullLocSeries ? (
+          <ModuleLifecycleChart series={fullLocSeries} showHeader={false} />
+        ) : (
+          <div className="empty-state">
+            <strong>{t("chart.empty.waitStructure")}</strong>
+            <p>{t("chart.empty.loadStructure")}</p>
+          </div>
+        ),
+      },
+      {
         id: "ranking",
-        tabLabel: "当前排行",
-        category: "排行",
-        title: "当前模块排行",
-        description: "在当前时间点看谁最大、谁最活跃，适合作为深入分析入口。",
-        summary: [`Top 模块 ${topModule?.name ?? "-"}`],
-        content: <ModuleRankingChart analysisId={currentAnalysis.job.id} />,
-      });
-    }
-
-    if (queryState?.seriesByMetric.churn) {
-      cards.push({
-        id: "churn-heatmap",
-        tabLabel: "热点扫描",
-        category: "波动",
-        title: "Churn 热力图",
-        description: "扫描哪个阶段最动荡、热点迁移到了哪些模块。",
-        summary: [`${queryState.seriesByMetric.churn.series.length} 个模块`, "时间 x 模块"],
-        content: <ModuleChurnHeatmapChart series={queryState.seriesByMetric.churn} />,
-      });
-    }
-
-    if (queryState?.candles) {
-      cards.push({
-        id: "candlestick",
-        tabLabel: "阶段波动",
-        category: "波动",
-        title: "模块 K 线图",
-        description: "聚焦单模块在每个采样桶内的开高低收，适合看真实波动。",
-        summary: [`候选 ${queryState.modules.length} 个模块`, `当前 ${topModule?.name ?? "-"}`],
-        content: <ModuleCandlestickChart candles={queryState.candles} />,
-      });
-    }
-
-    if (queryState?.seriesByMetric.loc) {
-      cards.push({
-        id: "bump-chart",
-        tabLabel: "地位变化",
-        category: "趋势",
-        title: "Top N 模块 Bump Chart",
-        description: "把变化理解成排名轨迹，更容易判断谁在上升、谁在掉队。",
-        summary: ["排名视角", "Top N"],
-        content: <ModuleBumpChart seriesByMetric={queryState.seriesByMetric} />,
-      });
-    }
-
-    if (queryState && currentAnalysis) {
-      cards.push({
-        id: "trend",
-        tabLabel: "趋势对比",
-        category: "趋势",
-        title: "模块趋势图",
-        description: "对少量核心模块做长期对比，适合做具体问题的深入排查。",
-        summary: [`${moduleCount} 个模块`, "loc / added / deleted / churn"],
+        tabLabel: t("chart.tabs.ranking"),
+        category: t("chart.focusCard.category.summary"),
+        title: t("chart.ranking.title"),
+        description: t("chart.ranking.description"),
+        summary: [rankingResponse?.items[0]?.moduleName ?? "-"],
         content: (
-          <ModuleTrendChart
-            analysisId={currentAnalysis.job.id}
-            seriesByMetric={queryState.seriesByMetric}
+          <ModuleRankingChart
+            metric={rankingMetric}
+            onMetricChange={setRankingMetric}
+            onVisibleCountChange={setRankingVisibleCount}
+            ranking={rankingResponse}
+            showHeader={false}
+            visibleCount={rankingVisibleCount}
           />
         ),
-      });
-    }
-
-    return cards;
+      },
+      {
+        id: "churn-heatmap",
+        tabLabel: t("chart.tabs.churn"),
+        category: t("chart.focusCard.category.volatility"),
+        title: t("chart.churn.title"),
+        description: t("chart.churn.description"),
+        summary: [
+          t("chart.churn.summary.modules", { count: formatNumber(churnSeries?.series.length ?? 0) }),
+          t("chart.summary.timeByModule"),
+        ],
+        content: churnSeries ? (
+          <ModuleChurnHeatmapChart
+            allSeries={fullChurnSeries}
+            allSeriesLoading={queryCache.isPending(seriesQueryKey("churn", null, true))}
+            onRequestAllSeries={() => {
+              void loadSeries("churn", null, true);
+            }}
+            series={churnSeries}
+            showHeader={false}
+          />
+        ) : (
+          <div className="empty-state">
+            <strong>{t("chart.empty.waitTrend")}</strong>
+            <p>{t("chart.empty.loadSeries", { metric: "churn" })}</p>
+          </div>
+        ),
+      },
+      {
+        id: "risk-scatter",
+        tabLabel: t("chart.tabs.risk"),
+        category: t("chart.focusCard.category.volatility"),
+        title: t("chart.risk.title"),
+        description: t("chart.risk.description"),
+        summary: [
+          locSeries
+            ? t("chart.summary.loadedTop", { count: formatNumber(locSeries.series.length) })
+            : t("chart.summary.loadedTop", { count: "0" }),
+          t("chart.risk.summary.axes"),
+        ],
+        content:
+          locSeries && churnSeries ? (
+            <ModuleRiskScatterChart
+              allChurnSeries={fullChurnSeries}
+              allLocSeries={fullLocSeries}
+              allSeriesLoading={
+                queryCache.isPending(seriesQueryKey("loc", null, true)) ||
+                queryCache.isPending(seriesQueryKey("churn", null, true))
+              }
+              churnSeries={churnSeries}
+              locSeries={locSeries}
+              onRequestAllSeries={() => {
+                void Promise.all([loadSeries("loc", null, true), loadSeries("churn", null, true)]);
+              }}
+              showHeader={false}
+            />
+          ) : (
+            <div className="empty-state">
+              <strong>{t("chart.empty.waitTrend")}</strong>
+              <p>{t("chart.empty.loadTrend")}</p>
+            </div>
+          ),
+      },
+      {
+        id: "calendar-heatmap",
+        tabLabel: t("chart.tabs.calendar"),
+        category: t("chart.focusCard.category.volatility"),
+        title: t("chart.calendar.title"),
+        description: t("chart.calendar.description"),
+        summary: [
+          fullChurnSeries
+            ? t("chart.summary.loadedAll", { count: formatNumber(fullChurnSeries.timeline.length) })
+            : t("chart.summary.points", { count: formatNumber(churnSeries?.timeline.length ?? 0) }),
+          t("chart.calendar.summary.sampled"),
+        ],
+        content: fullChurnSeries ? (
+          <ModuleCalendarHeatmapChart series={fullChurnSeries} showHeader={false} />
+        ) : (
+          <div className="empty-state">
+            <strong>{t("chart.empty.waitTrend")}</strong>
+            <p>{t("chart.empty.loadSeries", { metric: "churn" })}</p>
+          </div>
+        ),
+      },
+      {
+        id: "candlestick",
+        tabLabel: t("chart.tabs.candles"),
+        category: t("chart.focusCard.category.volatility"),
+        title: t("chart.candles.titleFallback"),
+        description: t("chart.candles.description"),
+        summary: [
+          fullCandles
+            ? t("chart.candles.summary.candidatesAll", { count: formatNumber(fullCandles.series.length) })
+            : t("chart.candles.summary.candidatesTop", { count: formatNumber(candles?.series.length ?? 0) }),
+          t("chart.candles.summary.currentPair", { name: topModule?.name ?? "-" }),
+        ],
+        content: candles ? (
+          <ModuleCandlestickChart
+            allCandles={fullCandles}
+            allCandlesLoading={queryCache.isPending(
+              candlesQueryKey(defaultModuleKeys, detailSummary?.job.sampling, true),
+            )}
+            candles={candles}
+            onRequestAllCandles={() => {
+              void loadCandles(defaultModuleKeys, detailSummary?.job.sampling, true);
+            }}
+            showHeader={false}
+          />
+        ) : (
+          <div className="empty-state">
+            <strong>{t("chart.empty.waitCandles")}</strong>
+            <p>{t("chart.empty.loadCandles")}</p>
+          </div>
+        ),
+      },
+      {
+        id: "bump-chart",
+        tabLabel: t("chart.tabs.bump"),
+        category: t("chart.focusCard.category.trend"),
+        title: t("chart.bump.title"),
+        description: t("chart.bump.description"),
+        summary: [t("chart.bump.rank"), "Top N"],
+        content: (
+          <ModuleBumpChart
+            allSeriesByMetric={{
+              loc: fullLocSeries,
+              churn: fullChurnSeries,
+            }}
+            allSeriesLoadingByMetric={{
+              loc: queryCache.isPending(seriesQueryKey("loc", null, true)),
+              churn: queryCache.isPending(seriesQueryKey("churn", null, true)),
+            }}
+            onRequestAllSeries={(metric) => {
+              void loadSeries(metric, null, true);
+            }}
+            seriesByMetric={seriesByMetric}
+            showHeader={false}
+          />
+        ),
+      },
+      {
+        id: "trend",
+        tabLabel: t("chart.tabs.trend"),
+        category: t("chart.focusCard.category.trend"),
+        title: t("chart.trend.title"),
+        description: t("chart.trend.description"),
+        summary: [
+          fullSeriesByMetric.loc
+            ? t("chart.summary.loadedAll", { count: formatNumber(fullSeriesByMetric.loc.series.length) })
+            : t("chart.summary.loadedTop", { count: formatNumber(locSeries?.series.length ?? 0) }),
+          "loc / added / deleted / churn",
+        ],
+        content:
+          seriesByMetric.loc &&
+          seriesByMetric.added &&
+          seriesByMetric.deleted &&
+          seriesByMetric.churn ? (
+            <ModuleTrendChart
+              allSeriesByMetric={fullSeriesByMetric}
+              allSeriesLoadingByMetric={{
+                loc: queryCache.isPending(seriesQueryKey("loc", null, true)),
+                added: queryCache.isPending(seriesQueryKey("added", null, true)),
+                deleted: queryCache.isPending(seriesQueryKey("deleted", null, true)),
+                churn: queryCache.isPending(seriesQueryKey("churn", null, true)),
+              }}
+              analysisId={currentAnalysis?.job.id ?? currentAnalysisId}
+              onRequestAllSeries={(metric) => {
+                void loadSeries(metric, null, true);
+              }}
+              seriesByMetric={seriesByMetric}
+              showHeader={false}
+            />
+          ) : (
+            <div className="empty-state">
+              <strong>{t("chart.empty.waitTrend")}</strong>
+              <p>{t("chart.empty.loadTrend")}</p>
+            </div>
+          ),
+      },
+    ];
   }, [
+    candles,
     currentAnalysis?.job.id,
+    currentAnalysisId,
+    defaultModuleCount,
+    fullCandles,
+    fullChurnSeries,
+    fullLocSeries,
+    formatNumber,
     locSeries,
     moduleCount,
     peakLoc,
-    queryState,
+    rankingMetric,
+    rankingResponse,
+    rankingVisibleCount,
+    fullSeriesByMetric,
+    seriesByMetric,
     topModule?.name,
     totalLoc,
+    t,
+    churnSeries,
   ]);
 
   useEffect(() => {
@@ -331,30 +708,30 @@ export function AnalysisDetailPage({
       <main className="page-grid">
         <section className="surface-section">
           <div className="empty-state">
-            <strong>分析任务 ID 缺失</strong>
-            <p>当前无法定位具体分析结果。</p>
+            <strong>{t("feedback.analysisMissingId")}</strong>
+            <p>{t("feedback.analysisMissing")}</p>
           </div>
         </section>
       </main>
     );
   }
 
-  if (!analysis || !currentAnalysis) {
+  if (!currentAnalysis) {
     return (
       <main className="page-grid">
         <section className="surface-section">
           <div className="section-heading section-heading-inline">
             <div>
-              <p className="section-kicker">Analysis</p>
-              <h2>正在加载分析详情</h2>
+              <p className="section-kicker">{t("page.analysis.title")}</p>
+              <h2>{t("feedback.analysisLoading")}</h2>
             </div>
             <Link className="secondary-button" to="/">
-              返回工作台
+              {t("action.backToWorkspace")}
             </Link>
           </div>
           <div className="empty-state">
-            <strong>分析详情加载中</strong>
-            <p>正在读取任务结果与关联查询数据。</p>
+            <strong>{t("feedback.analysisLoading")}</strong>
+            <p>{t("feedback.analysisSummaryLoading")}</p>
           </div>
         </section>
       </main>
@@ -364,10 +741,19 @@ export function AnalysisDetailPage({
   const loadedAnalysis = currentAnalysis;
 
   async function handleRefresh() {
-    await onRefreshAnalysis(loadedAnalysis.job.id);
-    if (loadedAnalysis.job.status === "done") {
-      setQueryState(null);
+    if (!analysisId) {
+      return;
     }
+
+    const refreshed = await onRefreshAnalysisDetailSummary(analysisId);
+    if (!refreshed) {
+      return;
+    }
+
+    setDetailSummary(refreshed);
+    queryCache.clear();
+    setQueryError(null);
+    setDetailRefreshToken((current) => current + 1);
   }
 
   async function handleCreateSampling(targetSampling: AnalysisSamplingDto) {
@@ -393,18 +779,14 @@ export function AnalysisDetailPage({
       <section className="surface-section detail-summary-section">
         <div className="section-heading section-heading-inline">
           <div>
-            <p className="section-kicker">Analysis</p>
-            <h2>{repository?.name ?? currentAnalysis.job.repositoryId}</h2>
-            <p className="section-description">
-              当前按 {getSamplingLabel(currentAnalysis.job.sampling)} 采样查看仓库演化结果，先看摘要，再进入单图分析。
-            </p>
+            <h2>{repository?.name ?? loadedAnalysis.job.repositoryId}</h2>
           </div>
           <div className="detail-action-row">
             <Link className="secondary-button" to="/">
-              返回工作台
+              {t("action.backToWorkspace")}
             </Link>
             <button className="secondary-button" onClick={() => void handleRefresh()} type="button">
-              刷新任务
+              {t("action.refreshJob")}
             </button>
           </div>
         </div>
@@ -414,7 +796,7 @@ export function AnalysisDetailPage({
             {siblingAnalysesBySampling.map(({ sampling, analysis: sibling }) =>
               sibling ? (
                 <Link
-                  className={`segmented-option ${currentAnalysis.job.sampling === sampling ? "active" : ""}`}
+                  className={`segmented-option ${loadedAnalysis.job.sampling === sampling ? "active" : ""}`}
                   key={sampling}
                   to={`/analyses/${sibling.job.id}`}
                 >
@@ -422,7 +804,7 @@ export function AnalysisDetailPage({
                 </Link>
               ) : (
                 <button
-                  className={`segmented-option ${currentAnalysis.job.sampling === sampling ? "active" : ""}`}
+                  className={`segmented-option ${loadedAnalysis.job.sampling === sampling ? "active" : ""}`}
                   key={sampling}
                   onClick={() => void handleCreateSampling(sampling)}
                   type="button"
@@ -437,58 +819,56 @@ export function AnalysisDetailPage({
 
           <div className="meta-chip-row">
             <span className="meta-chip">
-              分支 {repository?.defaultBranch ?? currentAnalysis.job.branch}
+              {t("label.branch")} {repository?.defaultBranch ?? loadedAnalysis.job.branch}
             </span>
-              <span className="meta-chip">状态 {loadedAnalysis.job.status}</span>
-              <span className="meta-chip">{loadedAnalysis.snapshots.length} 个采样点</span>
+            <span className="meta-chip">
+              {t("page.analysis.metaStatus", { status: loadedAnalysis.job.status })}
+            </span>
+            <span className="meta-chip">
+              {t("page.analysis.metaPoints", { count: formatNumber(loadedAnalysis.snapshotCount) })}
+            </span>
           </div>
         </div>
 
         <div className="summary-grid detail-summary-grid">
           <article className="summary-card">
-            <span>当前总 LOC</span>
+            <span>{t("label.currentLoc")}</span>
             <strong>{formatMetricValue(totalLoc)}</strong>
-            <p>当前时间点的仓库整体规模。</p>
+            <p>{t("page.analysis.summaryBody.currentLoc")}</p>
           </article>
           <article className="summary-card">
-            <span>模块数</span>
+            <span>{t("label.moduleCount")}</span>
             <strong>{formatMetricValue(moduleCount)}</strong>
-            <p>当前分析对应的模块数量。</p>
+            <p>{t("page.analysis.summaryBody.moduleCount")}</p>
           </article>
           <article className="summary-card">
-            <span>最新采样</span>
-            <strong>{latestSnapshot?.ts.slice(0, 10) ?? "-"}</strong>
-            <p>最近一次采样时间。</p>
+            <span>{t("label.latestSampling")}</span>
+            <strong>{latestSnapshot?.ts ? formatDate(latestSnapshot.ts) : "-"}</strong>
+            <p>{t("page.analysis.summaryBody.latestSampling")}</p>
           </article>
           <article className="summary-card">
-            <span>关键模块</span>
+            <span>{t("label.keyModule")}</span>
             <strong>{topModule?.name ?? "-"}</strong>
-            <p>按当前总量排序的最大模块。</p>
+            <p>{t("page.analysis.summaryBody.keyModule")}</p>
           </article>
           <article className="summary-card">
-            <span>新增 / 删除 / Churn</span>
-            <strong>
-              {formatMetricValue(totalAdded)} / {formatMetricValue(totalDeleted)} /{" "}
-              {formatMetricValue(totalChurn)}
-            </strong>
-            <p>基于最新分布查询得到的变更规模。</p>
+            <span>{t("label.phase")}</span>
+            <strong>{formatProgressPhase(loadedAnalysis.progress.phase)}</strong>
+            <p>{t("page.analysis.summaryBody.phase")}</p>
           </article>
         </div>
 
         {loadedAnalysis.job.status === "pending" || loadedAnalysis.job.status === "running" ? (
           <ProgressBar analysis={loadedAnalysis} />
         ) : null}
-        {queryLoading ? <p className="feedback">正在加载图表查询数据...</p> : null}
         {queryError ? <p className="feedback error">{queryError}</p> : null}
       </section>
 
-      {activeChart ? (
+      {loadedAnalysis.job.status === "done" ? (
         <section className="surface-section analysis-stage">
           <div className="section-heading section-heading-inline">
             <div>
-              <p className="section-kicker">Charts</p>
-              <h2>单图聚焦分析</h2>
-              <p className="section-description">一次只看一张主图，把注意力集中在当前问题上。</p>
+              <h2>{t("page.analysis.focus")}</h2>
             </div>
             <div className="analysis-stage-nav">
               <button
@@ -497,7 +877,7 @@ export function AnalysisDetailPage({
                 onClick={() => setActiveChartIndex((current) => Math.max(0, current - 1))}
                 type="button"
               >
-                上一张
+                {t("action.previousChart")}
               </button>
               <span className="meta-chip">
                 {activeChartIndex + 1} / {chartCards.length}
@@ -510,7 +890,7 @@ export function AnalysisDetailPage({
                 }
                 type="button"
               >
-                下一张
+                {t("action.nextChart")}
               </button>
             </div>
           </div>
@@ -529,24 +909,25 @@ export function AnalysisDetailPage({
             ))}
           </div>
 
-          <article className="analysis-focus-card">
-            <div className="analysis-focus-head">
-              <div>
-                <p className="section-kicker">{activeChart.category}</p>
-                <h3>{activeChart.title}</h3>
-                <p className="section-description">{activeChart.description}</p>
+          {activeChart ? (
+            <article className="analysis-focus-card">
+              <div className="analysis-focus-head">
+                <div>
+                  <h3>{activeChart.title}</h3>
+                  <p className="section-description">{activeChart.description}</p>
+                </div>
+                <div className="meta-chip-row">
+                  {activeChart.summary.map((item) => (
+                    <span className="meta-chip" key={item}>
+                      {item}
+                    </span>
+                  ))}
+                </div>
               </div>
-              <div className="meta-chip-row">
-                {activeChart.summary.map((item) => (
-                  <span className="meta-chip" key={item}>
-                    {item}
-                  </span>
-                ))}
-              </div>
-            </div>
 
-            <div className="analysis-focus-body">{activeChart.content}</div>
-          </article>
+              <div className="analysis-focus-body">{activeChart.content}</div>
+            </article>
+          ) : null}
         </section>
       ) : null}
     </main>

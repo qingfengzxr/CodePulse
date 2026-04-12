@@ -4,6 +4,7 @@ import * as echarts from "echarts";
 
 import type { SeriesResponseDto } from "@code-dance/contracts";
 import { buildMetricSeriesFromQuery, formatMetricLabel, type MetricKey } from "../analysis-data";
+import { useI18n } from "../i18n";
 import { useThemeMode } from "../theme";
 import {
   axisStyle,
@@ -16,6 +17,10 @@ import {
 type ModuleTrendChartProps = {
   analysisId: string;
   seriesByMetric: Partial<Record<MetricKey, SeriesResponseDto>>;
+  allSeriesByMetric?: Partial<Record<MetricKey, SeriesResponseDto | null>>;
+  allSeriesLoadingByMetric?: Partial<Record<MetricKey, boolean>>;
+  onRequestAllSeries?: (metric: MetricKey) => void;
+  showHeader?: boolean;
 };
 
 type FocusMode = 8 | 16 | "all";
@@ -34,7 +39,15 @@ function buildDefaultSelection(
   );
 }
 
-export function ModuleTrendChart({ analysisId, seriesByMetric }: ModuleTrendChartProps) {
+export function ModuleTrendChart({
+  analysisId,
+  seriesByMetric,
+  allSeriesByMetric,
+  allSeriesLoadingByMetric,
+  onRequestAllSeries,
+  showHeader = true,
+}: ModuleTrendChartProps) {
+  const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.EChartsType | null>(null);
   const themeMode = useThemeMode();
@@ -42,7 +55,17 @@ export function ModuleTrendChart({ analysisId, seriesByMetric }: ModuleTrendChar
   const [focusMode, setFocusMode] = useState<FocusMode>(8);
   const [searchQuery, setSearchQuery] = useState("");
   const [selection, setSelection] = useState<Record<string, boolean>>({});
-  const currentSeries = seriesByMetric[metric];
+  const defaultSeries = seriesByMetric[metric] ?? null;
+  const requiresExpandedSeries =
+    focusMode !== "all" && (defaultSeries?.series.length ?? 0) < focusMode;
+  const currentSeries =
+    (focusMode === "all" || requiresExpandedSeries) && allSeriesByMetric?.[metric]
+      ? allSeriesByMetric[metric]
+      : defaultSeries;
+  const currentSeriesLoading =
+    focusMode === "all" || requiresExpandedSeries
+      ? allSeriesLoadingByMetric?.[metric] ?? false
+      : false;
   const { xAxis, modules } = currentSeries
     ? buildMetricSeriesFromQuery(currentSeries)
     : { xAxis: [], modules: [] };
@@ -52,13 +75,18 @@ export function ModuleTrendChart({ analysisId, seriesByMetric }: ModuleTrendChar
   );
   const visibleModules = modules.filter((module) => selection[module.key] !== false);
   const selectableModules = filteredModules.filter((module) => selection[module.key] === false);
+  const currentSeriesId = currentSeries?.analysisId ?? "";
+  const requestedModuleCount =
+    focusMode === "all"
+      ? modules.length
+      : Math.min(focusMode, currentSeries?.series.length ?? 0);
 
   useEffect(() => {
     const defaultFocusMode = modules.length <= 8 ? "all" : 8;
     setFocusMode(defaultFocusMode);
     setSelection(buildDefaultSelection(moduleKeys, defaultFocusMode));
     setSearchQuery("");
-  }, [analysisId, metric, moduleKeys.join("|"), modules.length]);
+  }, [analysisId, currentSeriesId, metric]);
 
   useEffect(() => {
     if (!containerRef.current) {
@@ -182,6 +210,12 @@ export function ModuleTrendChart({ analysisId, seriesByMetric }: ModuleTrendChar
   }, [metric, modules, selection, themeMode, xAxis]);
 
   function applyFocus(nextFocusMode: FocusMode) {
+    if (
+      nextFocusMode === "all" ||
+      (typeof nextFocusMode === "number" && (defaultSeries?.series.length ?? 0) < nextFocusMode)
+    ) {
+      onRequestAllSeries?.(metric);
+    }
     setFocusMode(nextFocusMode);
     setSelection(buildDefaultSelection(moduleKeys, nextFocusMode));
   }
@@ -207,81 +241,98 @@ export function ModuleTrendChart({ analysisId, seriesByMetric }: ModuleTrendChar
   return (
     <div className="chart-panel">
       <div className="chart-toolbar chart-toolbar-stacked">
-        <div>
-          <h3>模块趋势图</h3>
-          <p className="chart-subtitle">
-            这里只对少量核心模块做趋势对比，支持真实 diff 指标切换、搜索、手动勾选和时间缩放。
-          </p>
-        </div>
-        <div className="chart-toolbar-inline">
-          <div className="metric-switch">
-            {metrics.map((candidate) => (
-              <button
-                aria-pressed={metric === candidate}
-                className={`chart-toggle-button ${metric === candidate ? "active" : ""}`}
-                key={candidate}
-                onClick={() => setMetric(candidate)}
-                type="button"
-              >
-                {formatMetricLabel(candidate)}
-              </button>
-            ))}
+        {showHeader ? (
+          <div>
+            <h3>{t("chart.trend.title")}</h3>
+            <p className="chart-subtitle">{t("chart.trend.description")}</p>
           </div>
-          <div className="chart-focus-switch">
-            {[8, 16, "all"].map((option) => (
-              <button
-                aria-pressed={focusMode === option}
-                className={`chart-toggle-button ${focusMode === option ? "active" : ""}`}
-                key={String(option)}
-                onClick={() => applyFocus(option as FocusMode)}
-                type="button"
+        ) : null}
+        <div className="chart-toolbar-inline">
+          <div className="chart-toolbar-group">
+            <div className="metric-switch">
+              {metrics.map((candidate) => (
+                <button
+                  aria-pressed={metric === candidate}
+                  className={`chart-toggle-button ${metric === candidate ? "active" : ""}`}
+                  key={candidate}
+                  onClick={() => setMetric(candidate)}
+                  type="button"
+                >
+                  {formatMetricLabel(candidate)}
+                </button>
+              ))}
+            </div>
+            <div className="chart-focus-switch">
+              {[8, 16, "all"].map((option) => (
+                <button
+                  aria-pressed={focusMode === option}
+                  className={`chart-toggle-button ${focusMode === option ? "active" : ""}`}
+                  key={String(option)}
+                  onClick={() => applyFocus(option as FocusMode)}
+                  type="button"
+                >
+                  {option === "all"
+                    ? t("chart.focus.all")
+                    : t("chart.focus.top", { count: String(option) })}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="chart-filter-controls">
+            <label className="chart-search chart-search-compact">
+              <span className="sr-only">{t("chart.filter.searchModules")}</span>
+              <input
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder={t("chart.filter.searchPlaceholder")}
+                type="search"
+                value={searchQuery}
+              />
+            </label>
+            <label className="chart-search chart-search-compact">
+              <span className="sr-only">{t("chart.filter.addModule")}</span>
+              <select
+                className="chart-select"
+                onChange={(event) => {
+                  handleAddModule(event.target.value);
+                  event.target.value = "";
+                }}
+                value=""
               >
-                {option === "all" ? "全部" : `前 ${option}`}
-              </button>
-            ))}
+                <option value="">{t("chart.filter.addFromList")}</option>
+                {selectableModules.map((module) => (
+                  <option key={module.key} value={module.key}>
+                    {module.name}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
         </div>
       </div>
 
       <div className="chart-filter-bar">
         <div className="chart-summary">
-          <span className="chart-chip">{modules.length} 个模块</span>
-          <span className="chart-chip">{visibleModules.length} 条曲线已显示</span>
+          <span className="chart-chip">
+            {focusMode === "all" && currentSeries
+              ? t("chart.summary.loadedAll", { count: String(modules.length) })
+              : t("chart.summary.loadedTop", { count: String(requestedModuleCount) })}
+          </span>
+          <span className="chart-chip">
+            {t("chart.trend.moduleVisible", { count: String(visibleModules.length) })}
+          </span>
           {visibleModules.length < modules.length ? (
             <span className="chart-chip chart-chip-muted">
-              其余 {modules.length - visibleModules.length} 个模块已隐藏
+              {t("chart.summary.hiddenModules", {
+                count: String(modules.length - visibleModules.length),
+              })}
             </span>
           ) : null}
         </div>
-        <label className="chart-search">
-          <span>搜索模块</span>
-          <input
-            onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="按模块名过滤"
-            type="search"
-            value={searchQuery}
-          />
-        </label>
-        <label className="chart-search">
-          <span>添加模块</span>
-          <select
-            className="chart-select"
-            onChange={(event) => {
-              handleAddModule(event.target.value);
-              event.target.value = "";
-            }}
-            value=""
-          >
-            <option value="">从列表中添加模块</option>
-            {selectableModules.map((module) => (
-              <option key={module.key} value={module.key}>
-                {module.name}
-              </option>
-            ))}
-          </select>
-        </label>
       </div>
 
+      {(focusMode === "all" || requiresExpandedSeries) && currentSeriesLoading && !currentSeries ? (
+        <p className="feedback">{t("action.loadAllModules")}...</p>
+      ) : null}
       <div className="module-selection-strip">
         {visibleModules.map((module) => (
           <button
@@ -292,17 +343,19 @@ export function ModuleTrendChart({ analysisId, seriesByMetric }: ModuleTrendChar
             type="button"
           >
             <strong>{module.name}</strong>
-            <span>点击隐藏</span>
+            <span>{t("action.hide")}</span>
           </button>
         ))}
         {visibleModules.length === 0 ? (
-          <p className="feedback">当前没有已选模块，可通过右侧下拉列表添加。</p>
+          <p className="feedback">{t("chart.trend.emptySelection")}</p>
         ) : null}
       </div>
 
       <div className="chart-surface" ref={containerRef} />
       {!currentSeries ? (
-        <p className="feedback">正在加载 {formatMetricLabel(metric)} 时间序列...</p>
+        <p className="feedback">
+          {t("chart.empty.loadSeries", { metric: formatMetricLabel(metric) })}
+        </p>
       ) : null}
     </div>
   );

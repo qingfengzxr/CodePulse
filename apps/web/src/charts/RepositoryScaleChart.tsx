@@ -4,14 +4,17 @@ import * as echarts from "echarts";
 
 import type { SeriesResponseDto } from "@code-dance/contracts";
 import { buildTotalLocSeriesFromQuery, formatMetricValue } from "../analysis-data";
+import { useI18n } from "../i18n";
 import { useThemeMode } from "../theme";
 import { axisStyle, baseGrid, createBaseChart, createBaseTooltip, getChartTokens } from "./chart-helpers";
 
 type RepositoryScaleChartProps = {
   series: SeriesResponseDto;
+  showHeader?: boolean;
 };
 
-export function RepositoryScaleChart({ series }: RepositoryScaleChartProps) {
+export function RepositoryScaleChart({ series, showHeader = true }: RepositoryScaleChartProps) {
+  const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.EChartsType | null>(null);
   const themeMode = useThemeMode();
@@ -97,7 +100,7 @@ export function RepositoryScaleChart({ series }: RepositoryScaleChartProps) {
         ],
         series: [
           {
-            name: "总 LOC",
+            name: t("chart.repoScale.series.totalLoc"),
             type: "line",
             smooth: true,
             showSymbol: false,
@@ -116,20 +119,24 @@ export function RepositoryScaleChart({ series }: RepositoryScaleChartProps) {
     );
 
     chart.resize();
-  }, [themeMode, values, xAxis]);
+  }, [t, themeMode, values, xAxis]);
 
   return (
     <div className="chart-panel">
       <div className="chart-toolbar">
-        <div>
-          <h3>仓库总 LOC 趋势</h3>
-          <p className="chart-subtitle">
-            回答“整体规模如何变化”，只展示总量，不在这里堆叠模块细节。
-          </p>
-        </div>
+        {showHeader ? (
+          <div>
+            <h3>{t("chart.repoScale.title")}</h3>
+            <p className="chart-subtitle">{t("chart.repoScale.description")}</p>
+          </div>
+        ) : null}
         <div className="chart-summary">
-          <span className="chart-chip">当前 {formatMetricValue(latestLoc)}</span>
-          <span className="chart-chip">峰值 {formatMetricValue(peakLoc)}</span>
+          <span className="chart-chip">
+            {t("chart.repoScale.summary.current", { value: formatMetricValue(latestLoc) })}
+          </span>
+          <span className="chart-chip">
+            {t("chart.repoScale.summary.peak", { value: formatMetricValue(peakLoc) })}
+          </span>
         </div>
       </div>
       <div className="chart-surface" ref={containerRef} />

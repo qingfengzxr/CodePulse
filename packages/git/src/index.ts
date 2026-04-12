@@ -469,6 +469,22 @@ export async function detectNodeModulesAtRevision(
   }
 }
 
+export async function detectGoModules(localPath: string): Promise<ModuleUnit[]> {
+  return detectGoModulesFromReader(createLocalSnapshotReader(localPath));
+}
+
+export async function detectGoModulesAtRevision(
+  localPath: string,
+  revision: string,
+): Promise<ModuleUnit[]> {
+  const reader = createGitRevisionReader(localPath, revision);
+  try {
+    return await detectGoModulesFromReader(reader);
+  } finally {
+    await reader.close();
+  }
+}
+
 type CargoPackageTable = {
   name?: string;
 };
@@ -489,7 +505,17 @@ type NodePackageManifest = {
   workspaces?: NodeWorkspaces;
 };
 
+type GoManifest = {
+  module?: string;
+};
+
 type RustCrate = {
+  name: string;
+  rootPath: string;
+  manifestPath: string;
+};
+
+type GoModuleEntry = {
   name: string;
   rootPath: string;
   manifestPath: string;
@@ -773,6 +799,135 @@ async function buildNodeModuleUnits(
     .filter((module) => module.files.length > 0);
 }
 
+async function detectGoModulesFromReader(
+  reader: RepositorySnapshotReader,
+): Promise<ModuleUnit[]> {
+  const goMod = await reader.readTextFile("go.mod");
+  if (goMod === null) {
+    return [];
+  }
+
+  const repositoryFiles = await reader.listFiles();
+  const moduleMap = new Map<string, GoModuleEntry>();
+  const goManifestPaths = repositoryFiles.filter(
+    (filePath) => filePath === "go.mod" || filePath.endsWith("/go.mod"),
+  );
+
+  for (const manifestPath of goManifestPaths) {
+    const rootPath = manifestPath === "go.mod" ? "." : manifestPath.slice(0, -"/go.mod".length);
+    const goModule = await loadGoModule(reader, rootPath);
+    if (goModule) {
+      moduleMap.set(goModule.rootPath, goModule);
+    }
+  }
+
+  return buildGoPackageUnits(repositoryFiles, Array.from(moduleMap.values()));
+}
+
+function parseGoManifest(content: string): GoManifest {
+  const moduleLine = content
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.startsWith("module "));
+
+  return {
+    module: moduleLine?.slice("module ".length).trim() || undefined,
+  };
+}
+
+async function loadGoModule(
+  reader: RepositorySnapshotReader,
+  rootPath: string,
+): Promise<GoModuleEntry | null> {
+  const manifestPath = rootPath === "." ? "go.mod" : posix.join(rootPath, "go.mod");
+  const manifestContent = await reader.readTextFile(manifestPath);
+  if (manifestContent === null) {
+    return null;
+  }
+
+  const manifest = parseGoManifest(manifestContent);
+  const moduleName = manifest.module || fallbackGoModuleName(rootPath);
+
+  return {
+    name: moduleName,
+    rootPath,
+    manifestPath,
+  };
+}
+
+function fallbackGoModuleName(rootPath: string): string {
+  if (rootPath === ".") {
+    return "root";
+  }
+
+  const segments = rootPath.split("/");
+  return segments.at(-1) ?? rootPath;
+}
+
+async function buildGoPackageUnits(
+  repositoryFiles: string[],
+  modules: GoModuleEntry[],
+): Promise<ModuleUnit[]> {
+  if (modules.length === 0) {
+    return [];
+  }
+
+  const packageFilesByDir = new Map<string, string[]>();
+
+  for (const filePath of repositoryFiles) {
+    if (!isGoPackageSourceFile(filePath)) {
+      continue;
+    }
+
+    const directoryPath = posix.dirname(filePath);
+    const packageRoot = directoryPath === "" ? "." : directoryPath;
+    const bucket = packageFilesByDir.get(packageRoot) ?? [];
+    bucket.push(filePath);
+    packageFilesByDir.set(packageRoot, bucket);
+  }
+
+  const moduleRoots = modules.map((entry) => entry.rootPath);
+  const detectedPackages: ModuleUnit[] = [];
+
+  for (const [rootPath, files] of packageFilesByDir.entries()) {
+    const owningModuleRoot = moduleRoots
+      .filter((candidate) => isWithinRoot(rootPath, candidate))
+      .sort((left, right) => relativePathDepth(right) - relativePathDepth(left))[0];
+    const owningModule = owningModuleRoot
+      ? modules.find((module) => module.rootPath === owningModuleRoot) ?? null
+      : null;
+
+    if (owningModule === null) {
+      continue;
+    }
+
+    const packageName = buildGoPackageImportPath(owningModule, rootPath);
+    detectedPackages.push({
+      key: `go:package:${packageName}`,
+      name: packageName,
+      kind: "go-package",
+      rootPath,
+      files: [...files].sort((left, right) => left.localeCompare(right)),
+      source: "auto",
+    });
+  }
+
+  return detectedPackages.sort((left, right) => left.key.localeCompare(right.key));
+}
+
+function buildGoPackageImportPath(module: GoModuleEntry, packageRootPath: string): string {
+  if (packageRootPath === module.rootPath) {
+    return module.name;
+  }
+
+  if (module.rootPath === ".") {
+    return `${module.name}/${packageRootPath}`;
+  }
+
+  const relativePackagePath = posix.relative(module.rootPath, packageRootPath);
+  return `${module.name}/${relativePackagePath}`;
+}
+
 const FRONTEND_SOURCE_EXTENSIONS = new Set([
   ".ts",
   ".tsx",
@@ -786,6 +941,18 @@ const FRONTEND_SOURCE_EXTENSIONS = new Set([
 
 function isFrontendSourceFile(filePath: string): boolean {
   return Array.from(FRONTEND_SOURCE_EXTENSIONS).some((extension) => filePath.endsWith(extension));
+}
+
+function isGoSourceFile(filePath: string): boolean {
+  return filePath.endsWith(".go");
+}
+
+function isGoPackageSourceFile(filePath: string): boolean {
+  if (!isGoSourceFile(filePath)) {
+    return false;
+  }
+
+  return !filePath.split("/").some((segment) => segment === "vendor");
 }
 
 const NESTED_NODE_CONTAINER_DIRS = new Set(["apps", "packages", "services", "os"]);
@@ -895,6 +1062,14 @@ function isWithinRoot(filePath: string, rootPath: string): boolean {
   }
 
   return filePath === rootPath || filePath.startsWith(`${rootPath}/`);
+}
+
+function relativePathDepth(path: string): number {
+  if (path === ".") {
+    return 0;
+  }
+
+  return path.split("/").length;
 }
 
 function normalizeRelativePath(value: string): string {

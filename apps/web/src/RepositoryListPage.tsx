@@ -8,6 +8,8 @@ import type {
   ModuleUnitDto,
   RepositoryTargetDto,
 } from "@code-dance/contracts";
+import { formatAnalysisStatus, formatRepositoryKind, formatRepositoryStatus } from "./display";
+import { useI18n } from "./i18n";
 import { ProgressBar } from "./ProgressBar";
 import { getSamplingLabel, samplingOptions } from "./sampling";
 
@@ -55,6 +57,7 @@ export function RepositoryListPage({
   selectedSamplingByRepository,
   submitting,
 }: RepositoryListPageProps) {
+  const { t, formatNumber, formatDate } = useI18n();
   const allAnalyses = Object.values(analysesByRepositoryAndSampling).filter(
     (analysis): analysis is AnalysisSummaryDto => Boolean(analysis),
   );
@@ -64,7 +67,7 @@ export function RepositoryListPage({
   ).length;
   const completedAnalyses = allAnalyses.filter((analysis) => analysis.job.status === "done").length;
   const latestActivity = allAnalyses
-    .map((analysis) => analysis.latestSnapshot?.ts?.slice(0, 10))
+    .map((analysis) => analysis.latestSnapshot?.ts)
     .filter(Boolean)
     .sort()
     .at(-1);
@@ -74,90 +77,101 @@ export function RepositoryListPage({
       <section className="surface-section workspace-summary">
         <div className="section-heading">
           <div>
-            <p className="section-kicker">Overview</p>
-            <h2>今天的工作台状态</h2>
-            <p className="section-description">先判断仓库规模、任务进度和最近活动，再进入具体仓库执行操作。</p>
+            <h2>{t("page.repositories.overviewTitle")}</h2>
+            <p className="section-description">{t("page.repositories.description")}</p>
           </div>
         </div>
 
         <div className="summary-grid">
           <article className="summary-card">
-            <span>仓库数</span>
-            <strong>{repositories.length}</strong>
-            <p>已接入到当前工作区的本地 Git 仓库。</p>
+            <span>{t("page.repositories.summary.repositories")}</span>
+            <strong>{formatNumber(repositories.length)}</strong>
+            <p>{t("page.repositories.summary.repositoriesBody")}</p>
           </article>
           <article className="summary-card">
-            <span>运行任务</span>
-            <strong>{activeAnalyses}</strong>
-            <p>仍在分析中的任务会自动轮询刷新状态。</p>
+            <span>{t("page.repositories.summary.active")}</span>
+            <strong>{formatNumber(activeAnalyses)}</strong>
+            <p>{t("page.repositories.summary.activeBody")}</p>
           </article>
           <article className="summary-card">
-            <span>已完成分析</span>
-            <strong>{completedAnalyses}</strong>
-            <p>完成后可直接进入详情页查看图表。</p>
+            <span>{t("page.repositories.summary.completed")}</span>
+            <strong>{formatNumber(completedAnalyses)}</strong>
+            <p>{t("page.repositories.summary.completedBody")}</p>
           </article>
           <article className="summary-card">
-            <span>最近活动</span>
-            <strong>{latestActivity ?? "-"}</strong>
-            <p>最近一次产生采样结果的日期。</p>
+            <span>{t("page.repositories.summary.latest")}</span>
+            <strong>{latestActivity ? formatDate(latestActivity) : "-"}</strong>
+            <p>{t("page.repositories.summary.latestBody")}</p>
           </article>
         </div>
       </section>
 
       <section className="surface-section intake-strip">
-        <div className="intake-strip-mark">+</div>
-        <div className="intake-strip-copy">
-          <p className="section-kicker">Registry</p>
-          <h2>添加本地仓库</h2>
-          <p className="section-description">输入本地 Git 路径后，立即纳入工作台进行采样分析与结果追踪。</p>
-        </div>
-        <form className="intake-form intake-form-inline" onSubmit={onSubmit}>
-          <label className="sr-only" htmlFor="localPath">
-            本地仓库绝对路径
-          </label>
-          <input
-            id="localPath"
-            onChange={(event) => onUpdateLocalPath(event.target.value)}
-            placeholder="Absolute path..."
-            required
-            type="text"
-            value={localPath}
-          />
-          <button className="primary-button" disabled={submitting} type="submit">
-            {submitting ? "添加中..." : "Add Repository"}
-          </button>
-        </form>
-        <button className="secondary-button intake-refresh" onClick={() => void onRefreshWorkspace()} type="button">
-          刷新
-        </button>
+        <div className="intake-strip-main">
+          <div className="intake-strip-copy">
+            <h2>{t("page.repositories.intakeTitle")}</h2>
+            <p className="section-description">{t("page.repositories.intakeBody")}</p>
+          </div>
 
-        {error ? <p className="feedback error">{error}</p> : null}
+          <div className="intake-panel">
+            <span className="control-label">Local Git Path</span>
+            <form className="intake-form intake-form-inline" onSubmit={onSubmit}>
+              <label className="sr-only" htmlFor="localPath">
+                {t("page.repositories.intakeTitle")}
+              </label>
+              <input
+                id="localPath"
+                onChange={(event) => onUpdateLocalPath(event.target.value)}
+                placeholder="Absolute path..."
+                required
+                type="text"
+                value={localPath}
+              />
+              <div className="intake-panel-actions">
+                <button className="primary-button" disabled={submitting} type="submit">
+                  {submitting ? `${t("action.addRepository")}...` : t("action.addRepository")}
+                </button>
+                <button
+                  className="secondary-button intake-refresh"
+                  onClick={() => void onRefreshWorkspace()}
+                  type="button"
+                >
+                  {t("action.refresh")}
+                </button>
+              </div>
+            </form>
+
+            {error ? <p className="feedback error">{error}</p> : null}
+          </div>
+        </div>
       </section>
 
       <section className="surface-section repository-section">
         <div className="section-heading section-heading-inline">
           <div>
-            <p className="section-kicker">Repositories</p>
-            <h2>仓库列表</h2>
-            <p className="section-description">每个仓库只保留必要信息，主操作始终固定在右侧操作区。</p>
+            <h2>{t("page.repositories.listTitle")}</h2>
           </div>
           <div className="meta-chip-row">
-            <span className="meta-chip">运行中 {activeAnalyses}</span>
-            <span className="meta-chip">总分析 {analysisCount}</span>
+            <span className="meta-chip">
+              {t("shell.meta.running", { count: formatNumber(activeAnalyses) })}
+            </span>
+            <span className="meta-chip">
+              {t("page.analysis.metaPoints", { count: formatNumber(analysisCount) })}
+            </span>
           </div>
         </div>
 
         {loading ? (
           <div className="empty-state">
-            <strong>正在加载仓库工作区</strong>
-            <p>正在读取仓库和分析摘要。</p>
+            <strong>{t("feedback.loadingWorkspace")}</strong>
+            <p>{t("feedback.loadingWorkspaceBody")}</p>
           </div>
         ) : null}
 
         {!loading && repositories.length === 0 ? (
           <div className="empty-state">
-            <strong>还没有接入任何仓库</strong>
-            <p>先添加一个本地仓库，工作台才会出现分析任务和结果入口。</p>
+            <strong>{t("feedback.emptyWorkspace")}</strong>
+            <p>{t("feedback.emptyWorkspaceBody")}</p>
           </div>
         ) : null}
 
@@ -176,17 +190,29 @@ export function RepositoryListPage({
               );
               const loadingKey = `${repository.id}:${selectedSampling}`;
               const moduleCount = moduleResults[repository.id]?.length ?? null;
-              const primaryActionLabel = hasDetailResult && analysis ? "查看演化" : "开始分析";
+              const primaryActionLabel = hasDetailResult && analysis
+                ? t("action.viewEvolution")
+                : t("action.startAnalysis");
+              const visualStatus = analysis?.job.status === "done"
+                ? "analyzed"
+                : analysis?.job.status ?? repository.status;
+              const visualStatusLabel = analysis?.job.status === "done"
+                ? formatRepositoryStatus("analyzed")
+                : analysis?.job.status
+                  ? formatAnalysisStatus(analysis.job.status)
+                  : formatRepositoryStatus(repository.status);
 
               return (
                 <article className="repository-tile" key={repository.id}>
                   <div className="repository-tile-head">
                     <div>
-                      <p className="repository-kind">{repository.detectedKinds.join(", ")}</p>
+                      <p className="repository-kind">
+                        {repository.detectedKinds.map(formatRepositoryKind).join(", ")}
+                      </p>
                       <h3>{repository.name}</h3>
                     </div>
-                    <span className={`status-pill status-${repository.status}`}>
-                      {analysis?.job.status === "done" ? "analyzed" : analysis?.job.status ?? repository.status}
+                    <span className={`status-pill status-${visualStatus}`}>
+                      {visualStatusLabel}
                     </span>
                   </div>
 
@@ -196,23 +222,23 @@ export function RepositoryListPage({
 
                   <div className="repository-metrics">
                     <div className="repository-metric">
-                      <span>Branch</span>
-                      <strong>{repository.defaultBranch ?? "unknown"}</strong>
+                      <span>{t("label.branch")}</span>
+                      <strong>{repository.defaultBranch ?? t("status.unknown")}</strong>
                     </div>
                     <div className="repository-metric">
-                      <span>Last Activity</span>
-                      <strong>{latestSnapshot?.ts.slice(0, 10).replaceAll("-", "/") ?? "N/A"}</strong>
+                      <span>{t("label.lastActivity")}</span>
+                      <strong>{latestSnapshot?.ts ? formatDate(latestSnapshot.ts) : "N/A"}</strong>
                     </div>
                   </div>
 
                   <div className="repository-metrics repository-metrics-secondary">
                     <div className="repository-metric">
-                      <span>Modules</span>
-                      <strong>{moduleCount ?? "-"}</strong>
+                      <span>{t("label.modules")}</span>
+                      <strong>{moduleCount === null ? "-" : formatNumber(moduleCount)}</strong>
                     </div>
                     <div className="repository-metric">
-                      <span>Snapshots</span>
-                      <strong>{analysis?.snapshotCount ?? 0}</strong>
+                      <span>{t("label.snapshots")}</span>
+                      <strong>{formatNumber(analysis?.snapshotCount ?? 0)}</strong>
                     </div>
                   </div>
 
@@ -223,8 +249,10 @@ export function RepositoryListPage({
                   ) : null}
 
                   <div className="repository-tile-footer">
-                    <div className="repository-tile-footer-meta">
-                      <span>{analysis ? "Ready for scan" : "Idle"}</span>
+                    <div className={`repository-tile-footer-meta repository-tile-footer-meta-${visualStatus}`}>
+                      <span>
+                        {analysis ? formatAnalysisStatus(analysis.job.status) : formatRepositoryStatus(repository.status)}
+                      </span>
                     </div>
                     <div className="repository-tile-footer-actions">
                       <div className="segmented-control segmented-control-compact">
@@ -250,7 +278,7 @@ export function RepositoryListPage({
                           onClick={() => void onRunAnalysis(repository, selectedSampling)}
                           type="button"
                         >
-                          {analysisLoading[loadingKey] ? "分析中..." : primaryActionLabel}
+                          {analysisLoading[loadingKey] ? `${t("action.runAnalysis")}...` : primaryActionLabel}
                         </button>
                       )}
                     </div>
@@ -262,17 +290,17 @@ export function RepositoryListPage({
                       onClick={() => void onLoadModules(repository.id)}
                       type="button"
                     >
-                      {moduleLoading[repository.id] ? "探测中..." : "探测模块"}
+                      {moduleLoading[repository.id] ? `${t("action.detectModules")}...` : t("action.detectModules")}
                     </button>
                     <Link className="secondary-button" to={`/repositories/${repository.id}/modules`}>
-                      模块清单
+                      {t("nav.modules")}
                     </Link>
                     <button
                       className="danger-button"
                       onClick={() => void onDeleteRepository(repository)}
                       type="button"
                     >
-                      {deleteLoading[repository.id] ? "删除中..." : "删除"}
+                      {deleteLoading[repository.id] ? `${t("action.delete")}...` : t("action.delete")}
                     </button>
                   </div>
                 </article>

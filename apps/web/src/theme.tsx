@@ -1,19 +1,13 @@
-import { createContext, useContext, type ReactNode } from "react";
+export {
+  getSystemResolvedTheme,
+  normalizeThemeMode,
+  resolveThemeMode,
+  type ResolvedTheme,
+  type ThemeMode,
+} from "./theme/index";
 
-export type ThemeMode = "light" | "dark";
-
-const ThemeContext = createContext<ThemeMode>("dark");
-
-export function ThemeProvider({
-  children,
-  theme,
-}: {
-  children: ReactNode;
-  theme: ThemeMode;
-}) {
-  return <ThemeContext.Provider value={theme}>{children}</ThemeContext.Provider>;
-}
+import { usePreferences } from "./app/preferences";
 
 export function useThemeMode() {
-  return useContext(ThemeContext);
+  return usePreferences().resolvedTheme;
 }

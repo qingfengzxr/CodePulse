@@ -1,3 +1,4 @@
+import { analyzeGoHistory } from "./languages/go/index.js";
 import { analyzeNodeHistory } from "./languages/node/index.js";
 import { analyzeRustHistory } from "./languages/rust/index.js";
 import type {
@@ -32,6 +33,13 @@ export async function analyzeRepositoryHistory(
     analyzers.push({
       name: "node",
       run: input.__testOverrides?.node ?? analyzeNodeHistory,
+    });
+  }
+
+  if (input.detectedKinds.includes("go")) {
+    analyzers.push({
+      name: "go",
+      run: input.__testOverrides?.go ?? analyzeGoHistory,
     });
   }
 

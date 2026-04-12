@@ -21,7 +21,7 @@ export type AnalyzeRepositoryHistoryInput = {
   // Test-only hook for forcing analyzer outputs without touching the filesystem.
   __testOverrides?: Partial<
     Record<
-      "rust" | "node",
+      "rust" | "node" | "go",
       (input: AnalyzeRepositoryHistoryInput) => Promise<AnalyzeRepositoryHistoryOutput>
     >
   >;

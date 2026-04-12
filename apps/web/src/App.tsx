@@ -2,6 +2,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { Link, Route, Routes, useLocation } from "react-router-dom";
 
 import type {
+  AnalysisDetailSummaryDto,
   AnalysisResultDto,
   AnalysisSamplingDto,
   AnalysisSummaryDto,
@@ -11,9 +12,15 @@ import type {
   RepositoryTargetDto,
 } from "@code-dance/contracts";
 import { AnalysisDetailPage } from "./AnalysisDetailPage";
+import { usePreferences, type AppLocale } from "./app/preferences";
+import {
+  formatAnalysisStatus,
+  formatRepositoryStatus,
+} from "./display";
+import { useI18n } from "./i18n";
 import { RepositoryModulesPage } from "./RepositoryModulesPage";
 import { RepositoryListPage } from "./RepositoryListPage";
-import { ThemeProvider, type ThemeMode } from "./theme";
+import { type ThemeMode } from "./theme";
 
 type ApiError = {
   error: string;
@@ -26,11 +33,20 @@ type ShellCopy = {
   description: string;
 };
 
-const THEME_STORAGE_KEY = "code-dance-theme";
+const localeOptions: AppLocale[] = ["en", "zh-CN"];
+
+function getNextThemeMode(themeMode: ThemeMode, resolvedTheme: "light" | "dark"): ThemeMode {
+  if (themeMode === "system") {
+    return resolvedTheme === "dark" ? "light" : "dark";
+  }
+
+  return themeMode === "dark" ? "light" : "dark";
+}
 
 export function App() {
   const location = useLocation();
-  const [themeMode, setThemeMode] = useState<ThemeMode>(() => readInitialThemeMode());
+  const { t, formatNumber } = useI18n();
+  const { locale, resolvedTheme, setLocale, themeMode, setThemeMode } = usePreferences();
   const [localPath, setLocalPath] = useState("");
   const [repositories, setRepositories] = useState<RepositoryTargetDto[]>([]);
   const [moduleResults, setModuleResults] = useState<Record<string, ModuleUnitDto[] | undefined>>(
@@ -40,7 +56,6 @@ export function App() {
   const [analysisSummaries, setAnalysisSummaries] = useState<Record<string, AnalysisSummaryDto>>(
     {},
   );
-  const [analysisDetails, setAnalysisDetails] = useState<Record<string, AnalysisResultDto>>({});
   const [analysisLoading, setAnalysisLoading] = useState<Record<string, boolean>>({});
   const [selectedSamplingByRepository, setSelectedSamplingByRepository] = useState<
     Record<string, AnalysisSamplingDto>
@@ -49,30 +64,6 @@ export function App() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = themeMode;
-    document.documentElement.style.colorScheme = themeMode;
-    window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
-  }, [themeMode]);
-
-  useEffect(() => {
-    const activeAnalyses = Object.values(analysisSummaries).filter(
-      (analysis) => analysis.job.status === "pending" || analysis.job.status === "running",
-    );
-
-    if (activeAnalyses.length === 0) {
-      return;
-    }
-
-    const timer = window.setInterval(() => {
-      for (const analysis of activeAnalyses) {
-        void refreshAnalysis(analysis.job.id);
-      }
-    }, 1000);
-
-    return () => window.clearInterval(timer);
-  }, [analysisSummaries]);
 
   const loadWorkspace = useCallback(async () => {
     setLoading(true);
@@ -100,11 +91,11 @@ export function App() {
         Object.fromEntries(analysisSummaryPayload.map((analysis) => [analysis.job.id, analysis])),
       );
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "failed to load workspace");
+      setError(requestError instanceof Error ? requestError.message : t("feedback.errorFallback"));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   const loadModules = useCallback(async (repositoryId: string) => {
     setModuleLoading((current) => ({ ...current, [repositoryId]: true }));
@@ -123,11 +114,11 @@ export function App() {
         [repositoryId]: payload.modules,
       }));
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "failed to detect modules");
+      setError(requestError instanceof Error ? requestError.message : t("feedback.errorFallback"));
     } finally {
       setModuleLoading((current) => ({ ...current, [repositoryId]: false }));
     }
-  }, []);
+  }, [t]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -154,87 +145,122 @@ export function App() {
       setLocalPath("");
       await loadWorkspace();
     } catch (requestError) {
-      setError(
-        requestError instanceof Error ? requestError.message : "repository registration failed",
-      );
+      setError(requestError instanceof Error ? requestError.message : t("feedback.errorFallback"));
     } finally {
       setSubmitting(false);
     }
   }
 
-  const refreshAnalysis = useCallback(async (analysisId: string) => {
+  const refreshAnalysisSummary = useCallback(async (analysisId: string): Promise<AnalysisSummaryDto | null> => {
     try {
-      const response = await fetch(`/api/analyses/${analysisId}`);
-      if (!response.ok) {
-        return;
+      const summaryResponse = await fetch(`/api/analysis-summaries/${analysisId}`);
+      if (summaryResponse.ok) {
+        const summary = (await summaryResponse.json()) as AnalysisSummaryDto;
+        setAnalysisSummaries((current) => ({
+          ...current,
+          [summary.job.id]: summary,
+        }));
+        return summary;
       }
 
-      const analysis = (await response.json()) as AnalysisResultDto;
-      setAnalysisDetails((current) => ({
-        ...current,
-        [analysis.job.id]: analysis,
-      }));
-      setAnalysisSummaries((current) => ({
-        ...current,
-        [analysis.job.id]: summarizeAnalysis(analysis),
-      }));
+      return null;
     } catch {
-      // Keep the latest known result on transient polling errors.
+      return null;
     }
   }, []);
+
+  const refreshAnalysisDetailSummary = useCallback(
+    async (analysisId: string): Promise<AnalysisDetailSummaryDto | null> => {
+      try {
+        const response = await fetch(`/api/analysis-details/${analysisId}`);
+        if (!response.ok) {
+          return null;
+        }
+
+        const analysis = (await response.json()) as AnalysisDetailSummaryDto;
+        setAnalysisSummaries((current) => ({
+          ...current,
+          [analysis.job.id]: {
+            job: analysis.job,
+            progress: analysis.progress,
+            snapshotCount: analysis.snapshotCount,
+            latestSnapshot: analysis.latestSnapshot,
+          },
+        }));
+        return analysis;
+      } catch {
+        return null;
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const activeAnalyses = Object.values(analysisSummaries).filter(
+      (analysis) => analysis.job.status === "pending" || analysis.job.status === "running",
+    );
+
+    if (activeAnalyses.length === 0) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      for (const analysis of activeAnalyses) {
+        void refreshAnalysisSummary(analysis.job.id);
+      }
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [analysisSummaries, refreshAnalysisSummary]);
 
   const runAnalysis = useCallback(
     async (
       repository: RepositoryTargetDto,
       sampling = selectedSamplingByRepository[repository.id] ?? "weekly",
     ): Promise<AnalysisResultDto | null> => {
-    const loadingKey = `${repository.id}:${sampling}`;
-    setAnalysisLoading((current) => ({ ...current, [loadingKey]: true }));
-    setError(null);
+      const loadingKey = `${repository.id}:${sampling}`;
+      setAnalysisLoading((current) => ({ ...current, [loadingKey]: true }));
+      setError(null);
 
-    const payload: CreateAnalysisRequestDto = {
-      repositoryId: repository.id,
-      branch: repository.defaultBranch ?? undefined,
-      sampling,
-    };
+      const payload: CreateAnalysisRequestDto = {
+        repositoryId: repository.id,
+        branch: repository.defaultBranch ?? undefined,
+        sampling,
+      };
 
-    try {
-      const response = await fetch("/api/analyses", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
+      try {
+        const response = await fetch("/api/analyses", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
 
-      if (!response.ok) {
-        const errorPayload = (await response.json()) as ApiError;
-        throw new Error(errorPayload.message);
+        if (!response.ok) {
+          const errorPayload = (await response.json()) as ApiError;
+          throw new Error(errorPayload.message);
+        }
+
+        const analysis = (await response.json()) as AnalysisResultDto;
+        setAnalysisSummaries((current) => ({
+          ...current,
+          [analysis.job.id]: summarizeAnalysis(analysis),
+        }));
+        return analysis;
+      } catch (requestError) {
+        setError(requestError instanceof Error ? requestError.message : t("feedback.errorFallback"));
+        return null;
+      } finally {
+        setAnalysisLoading((current) => ({ ...current, [loadingKey]: false }));
       }
-
-      const analysis = (await response.json()) as AnalysisResultDto;
-      setAnalysisDetails((current) => ({
-        ...current,
-        [analysis.job.id]: analysis,
-      }));
-      setAnalysisSummaries((current) => ({
-        ...current,
-        [analysis.job.id]: summarizeAnalysis(analysis),
-      }));
-      return analysis;
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "failed to run analysis");
-      return null;
-    } finally {
-      setAnalysisLoading((current) => ({ ...current, [loadingKey]: false }));
-    }
     },
-    [selectedSamplingByRepository],
+    [selectedSamplingByRepository, t],
   );
 
   const deleteRepository = useCallback(async (repository: RepositoryTargetDto) => {
     const confirmed = window.confirm(
-      `确认删除仓库“${repository.name}”吗？这会同时删除关联的分析结果。`,
+      t("dialog.deleteRepository.confirm", { name: repository.name }),
     );
     if (!confirmed) {
       return;
@@ -281,21 +307,12 @@ export function App() {
           ),
         ),
       );
-      setAnalysisDetails((current) =>
-        Object.fromEntries(
-          Object.entries(current).filter(
-            ([, analysis]) => analysis.job.repositoryId !== repository.id,
-          ),
-        ),
-      );
     } catch (requestError) {
-      setError(
-        requestError instanceof Error ? requestError.message : "failed to delete repository",
-      );
+      setError(requestError instanceof Error ? requestError.message : t("feedback.errorFallback"));
     } finally {
       setDeleteLoading((current) => ({ ...current, [repository.id]: false }));
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void loadWorkspace();
@@ -331,152 +348,161 @@ export function App() {
     () => repositories.filter((repository) => repository.status === "ready").length,
     [repositories],
   );
-  const shellCopy = getShellCopy(location.pathname);
+  const shellCopy = getShellCopy(location.pathname, t);
 
   return (
-    <ThemeProvider theme={themeMode}>
-      <div className="app-shell">
-        <aside className="shell-sidebar">
-          <div className="brand-block">
-            <div className="brand-mark">CD</div>
-            <div className="brand-copy">
-              <strong>Code Dance</strong>
-              <span>仓库演化分析工作区</span>
-            </div>
-          </div>
-
-          <nav className="sidebar-nav">
-            <Link
-              className={`sidebar-link ${location.pathname === "/" ? "active" : ""}`}
-              to="/"
-            >
-              <span className="sidebar-link-index">01</span>
-              <span className="sidebar-link-copy">
-                <strong>工作台</strong>
-                <small>仓库接入、任务运行、结果入口</small>
-              </span>
-            </Link>
-
-            <div className={`sidebar-link ${location.pathname.startsWith("/analyses/") ? "active" : ""}`}>
-              <span className="sidebar-link-index">02</span>
-              <span className="sidebar-link-copy">
-                <strong>分析详情</strong>
-                <small>聚焦单张主图，按节奏阅读结果</small>
-              </span>
-            </div>
-
-            <div
-              className={`sidebar-link ${location.pathname.startsWith("/repositories/") ? "active" : ""}`}
-            >
-              <span className="sidebar-link-index">03</span>
-              <span className="sidebar-link-copy">
-                <strong>模块清单</strong>
-                <small>补充查看仓库的技术模块结构</small>
-              </span>
-            </div>
-          </nav>
-
-          <div className="sidebar-footer">
-            <span className="mono-badge">v0.1.0-alpha</span>
-            <p>保留现有分析接口，重做前端体验。</p>
-          </div>
-        </aside>
-
-        <div className="shell-main">
-          <header className="shell-header">
-            <div className="shell-header-copy">
-              <p className="page-kicker">{shellCopy.eyebrow}</p>
-              <h1>{shellCopy.title}</h1>
-              <p>{shellCopy.description}</p>
-            </div>
-
-            <div className="shell-header-meta">
-              <div className="shell-meta-cluster">
-                <span className="meta-chip">仓库 {repositories.length}</span>
-                <span className="meta-chip">运行中 {activeAnalyses}</span>
-                <span className="meta-chip">可分析 {readyRepositories}</span>
-              </div>
-              <button
-                aria-label={`切换到${themeMode === "dark" ? "亮色" : "暗色"}主题`}
-                className="secondary-button theme-toggle"
-                onClick={() => setThemeMode((current) => (current === "dark" ? "light" : "dark"))}
-                type="button"
-              >
-                <span className="theme-toggle-mark">{themeMode === "dark" ? "Light" : "Dark"}</span>
-                <span>{themeMode === "dark" ? "切换亮色" : "切换暗色"}</span>
-              </button>
-            </div>
-          </header>
-
-          <div className="page-shell">
-            <Routes>
-              <Route
-                element={
-                  <RepositoryListPage
-                    analysesByRepositoryAndSampling={latestAnalysesByRepositoryAndSampling}
-                    analysisLoading={analysisLoading}
-                    deleteLoading={deleteLoading}
-                    error={error}
-                    loading={loading}
-                    localPath={localPath}
-                    moduleLoading={moduleLoading}
-                    moduleResults={moduleResults}
-                    onDeleteRepository={deleteRepository}
-                    onLoadModules={loadModules}
-                    onRefreshWorkspace={loadWorkspace}
-                    onRunAnalysis={runAnalysis}
-                    onSubmit={handleSubmit}
-                    onUpdateLocalPath={setLocalPath}
-                    onUpdateSampling={updateRepositorySampling}
-                    repositories={repositories}
-                    selectedSamplingByRepository={selectedSamplingByRepository}
-                    submitting={submitting}
-                  />
-                }
-                path="/"
-              />
-              <Route
-                element={
-                  <AnalysisDetailPage
-                    analyses={analysisDetails}
-                    analysisSummaries={analysisSummaries}
-                    onRefreshAnalysis={refreshAnalysis}
-                    onRunAnalysis={runAnalysis}
-                    repositories={repositories}
-                  />
-                }
-                path="/analyses/:analysisId"
-              />
-              <Route
-                element={
-                  <RepositoryModulesPage
-                    moduleLoading={moduleLoading}
-                    moduleResults={moduleResults}
-                    onLoadModules={loadModules}
-                    repositories={repositories}
-                  />
-                }
-                path="/repositories/:repositoryId/modules"
-              />
-            </Routes>
+    <div className="app-shell">
+      <aside className="shell-sidebar">
+        <div className="brand-block">
+          <div className="brand-mark">CD</div>
+          <div className="brand-copy">
+            <strong>Code Dance</strong>
+            <span>{t("shell.brandDescription")}</span>
           </div>
         </div>
+
+        <nav className="sidebar-nav">
+          <Link className={`sidebar-link ${location.pathname === "/" ? "active" : ""}`} to="/">
+            <span className="sidebar-link-index">01</span>
+            <span className="sidebar-link-copy">
+              <strong>{t("nav.workspace")}</strong>
+              <small>{t("nav.workspaceDescription")}</small>
+            </span>
+          </Link>
+
+          <div className={`sidebar-link ${location.pathname.startsWith("/analyses/") ? "active" : ""}`}>
+            <span className="sidebar-link-index">02</span>
+            <span className="sidebar-link-copy">
+              <strong>{t("nav.analysis")}</strong>
+              <small>{t("nav.analysisDescription")}</small>
+            </span>
+          </div>
+
+          <div className={`sidebar-link ${location.pathname.startsWith("/repositories/") ? "active" : ""}`}>
+            <span className="sidebar-link-index">03</span>
+            <span className="sidebar-link-copy">
+              <strong>{t("nav.modules")}</strong>
+              <small>{t("nav.modulesDescription")}</small>
+            </span>
+          </div>
+        </nav>
+
+        <div className="sidebar-footer">
+          <span className="mono-badge">v0.1.0-alpha</span>
+          <p>{t("shell.sidebarFootnote")}</p>
+        </div>
+      </aside>
+
+      <div className="shell-main">
+        <header className="shell-header">
+          <div className="shell-header-copy">
+            <p className="page-kicker">{shellCopy.eyebrow}</p>
+            <h1>{shellCopy.title}</h1>
+            <p>{shellCopy.description}</p>
+          </div>
+
+          <div className="shell-header-meta">
+            <div className="shell-meta-cluster">
+              <span className="meta-chip">
+                {t("shell.meta.repositories", { count: formatNumber(repositories.length) })}
+              </span>
+              <span className="meta-chip">
+                {t("shell.meta.running", { count: formatNumber(activeAnalyses) })}
+              </span>
+              <span className="meta-chip">
+                {t("shell.meta.ready", { count: formatNumber(readyRepositories) })}
+              </span>
+            </div>
+            <div className="preferences-strip">
+              <label className="preferences-field">
+                <span>{t("shell.locale.label")}</span>
+                <select
+                  className="chart-select"
+                  onChange={(event) => setLocale(event.target.value as AppLocale)}
+                  value={locale}
+                >
+                  {localeOptions.map((option) => (
+                    <option key={option} value={option}>
+                      {option === "en" ? t("shell.locale.english") : t("shell.locale.zh-CN")}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="preferences-field preferences-field-icon">
+                <span className="sr-only">{t("shell.theme.label")}</span>
+                <button
+                  aria-label={t(
+                    `shell.theme.${getNextThemeMode(themeMode, resolvedTheme)}` as const,
+                  )}
+                  className="theme-toggle-button"
+                  onClick={() => setThemeMode(getNextThemeMode(themeMode, resolvedTheme))}
+                  title={t(`shell.theme.${themeMode}` as const)}
+                  type="button"
+                >
+                  <span aria-hidden="true" className="theme-toggle-icon">
+                    {resolvedTheme === "dark" ? "☾" : "☀"}
+                  </span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <div className="page-shell">
+          <Routes>
+            <Route
+              element={
+                <RepositoryListPage
+                  analysesByRepositoryAndSampling={latestAnalysesByRepositoryAndSampling}
+                  analysisLoading={analysisLoading}
+                  deleteLoading={deleteLoading}
+                  error={error}
+                  loading={loading}
+                  localPath={localPath}
+                  moduleLoading={moduleLoading}
+                  moduleResults={moduleResults}
+                  onDeleteRepository={deleteRepository}
+                  onLoadModules={loadModules}
+                  onRefreshWorkspace={loadWorkspace}
+                  onRunAnalysis={runAnalysis}
+                  onSubmit={handleSubmit}
+                  onUpdateLocalPath={setLocalPath}
+                  onUpdateSampling={updateRepositorySampling}
+                  repositories={repositories}
+                  selectedSamplingByRepository={selectedSamplingByRepository}
+                  submitting={submitting}
+                />
+              }
+              path="/"
+            />
+            <Route
+              element={
+                <AnalysisDetailPage
+                  analysisSummaries={analysisSummaries}
+                  onRefreshAnalysisDetailSummary={refreshAnalysisDetailSummary}
+                  onRefreshAnalysisSummary={refreshAnalysisSummary}
+                  onRunAnalysis={runAnalysis}
+                  repositories={repositories}
+                />
+              }
+              path="/analyses/:analysisId"
+            />
+            <Route
+              element={
+                <RepositoryModulesPage
+                  moduleLoading={moduleLoading}
+                  moduleResults={moduleResults}
+                  onLoadModules={loadModules}
+                  repositories={repositories}
+                />
+              }
+              path="/repositories/:repositoryId/modules"
+            />
+          </Routes>
+        </div>
       </div>
-    </ThemeProvider>
+    </div>
   );
-}
-
-function readInitialThemeMode(): ThemeMode {
-  if (typeof window === "undefined") {
-    return "dark";
-  }
-
-  const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-  if (stored === "light" || stored === "dark") {
-    return stored;
-  }
-
-  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
 }
 
 function summarizeAnalysis(analysis: AnalysisResultDto): AnalysisSummaryDto {
@@ -496,26 +522,26 @@ function summarizeAnalysis(analysis: AnalysisResultDto): AnalysisSummaryDto {
   };
 }
 
-function getShellCopy(pathname: string): ShellCopy {
+function getShellCopy(pathname: string, t: (key: any, params?: Record<string, string>) => string): ShellCopy {
   if (pathname.startsWith("/analyses/")) {
     return {
-      eyebrow: "Analysis View",
-      title: "分析详情",
-      description: "单图聚焦查看仓库演化结果，按结构、波动与趋势逐步深入。",
+      eyebrow: t("shell.title.analysisEyebrow"),
+      title: t("shell.title.analysis"),
+      description: t("shell.title.analysisBody"),
     };
   }
 
   if (pathname.startsWith("/repositories/")) {
     return {
-      eyebrow: "Module View",
-      title: "模块清单",
-      description: "独立查看仓库模块结构，避免工作台列表承载过多细节。",
+      eyebrow: t("shell.title.modulesEyebrow"),
+      title: t("shell.title.modules"),
+      description: t("shell.title.modulesBody"),
     };
   }
 
   return {
-    eyebrow: "Workspace",
-    title: "仓库工作台",
-    description: "在一个页面里完成仓库接入、任务运行、状态筛查和结果跳转。",
+    eyebrow: t("shell.title.workspaceEyebrow"),
+    title: t("shell.title.workspace"),
+    description: t("shell.title.workspaceBody"),
   };
 }

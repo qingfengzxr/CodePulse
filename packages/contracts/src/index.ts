@@ -133,7 +133,9 @@ export const analysisModuleSummarySchema = z.object({
 export const seriesQuerySchema = z.object({
   analysisId: z.string().min(1),
   metric: analysisMetricSchema,
+  all: z.coerce.boolean().default(false),
   moduleKeys: z.array(z.string().min(1)).default([]),
+  limit: z.coerce.number().int().positive().max(100).optional(),
 });
 
 export const seriesModuleSchema = z.object({
@@ -152,7 +154,10 @@ export const seriesResponseSchema = z.object({
 
 export const candlesQuerySchema = z.object({
   analysisId: z.string().min(1),
+  sampling: analysisSamplingSchema.optional(),
+  all: z.coerce.boolean().default(false),
   moduleKeys: z.array(z.string().min(1)).default([]),
+  limit: z.coerce.number().int().positive().max(100).optional(),
 });
 
 export const candleSeriesSchema = z.object({
@@ -227,6 +232,20 @@ export const analysisSummarySchema = z.object({
   latestSnapshot: snapshotSummarySchema.nullable(),
 });
 
+export const analysisSummaryLookupParamsSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const analysisDetailSummarySchema = z.object({
+  job: analysisJobSchema,
+  progress: analysisProgressSchema,
+  snapshotCount: z.number().int().nonnegative(),
+  latestSnapshot: snapshotSummarySchema.nullable(),
+  repository: repositoryTargetSchema.nullable(),
+  modules: z.array(analysisModuleSummarySchema),
+  defaultModuleKeys: z.array(z.string()),
+});
+
 export const apiErrorSchema = z.object({
   error: z.string(),
   message: z.string(),
@@ -260,4 +279,6 @@ export type RankingItemDto = z.infer<typeof rankingItemSchema>;
 export type RankingResponseDto = z.infer<typeof rankingResponseSchema>;
 export type AnalysisResultDto = z.infer<typeof analysisResultSchema>;
 export type AnalysisSummaryDto = z.infer<typeof analysisSummarySchema>;
+export type AnalysisSummaryLookupParamsDto = z.infer<typeof analysisSummaryLookupParamsSchema>;
+export type AnalysisDetailSummaryDto = z.infer<typeof analysisDetailSummarySchema>;
 export type ApiErrorDto = z.infer<typeof apiErrorSchema>;

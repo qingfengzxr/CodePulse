@@ -6,11 +6,13 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -p tsconfig.json --noEmit && vite build",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test src/*.test.ts src/**/*.test.ts"
   },
   "dependencies": {
     "@code-dance/contracts": "workspace:*",
     "echarts": "^6.0.0",
+    "lightweight-charts": "^5.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.14.0"

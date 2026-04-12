@@ -1,9 +1,13 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
+import { execFile } from "node:child_process";
 import { realpath } from "node:fs/promises";
+import { promisify } from "node:util";
 
 import {
+  analysisDetailSummarySchema,
   analysisSummarySchema,
+  analysisSummaryLookupParamsSchema,
   analysisResultSchema,
   candlesQuerySchema,
   candlesResponseSchema,
@@ -18,6 +22,7 @@ import {
   seriesQuerySchema,
   seriesResponseSchema,
   analysisModuleSummarySchema,
+  type RepositoryModulesResponseDto,
 } from "@code-dance/contracts";
 import {
   AnalysisAbortedError,
@@ -27,11 +32,14 @@ import {
 import { probeLocalRepository } from "@code-dance/git";
 import { createSqliteStorage, defaultDatabasePath, type SqliteStorage } from "@code-dance/storage";
 
+const execFileAsync = promisify(execFile);
+
 type CreateServerDeps = {
   storage?: SqliteStorage;
   analyzeRepositoryHistoryImpl?: typeof analyzeRepositoryHistory;
   detectRepositoryModulesImpl?: typeof detectRepositoryModules;
   probeLocalRepositoryImpl?: typeof probeLocalRepository;
+  readRepositoryHeadImpl?: typeof readRepositoryHead;
   analysisSchedulerConfig?: Partial<AnalysisSchedulerConfig>;
   analysisPerformanceConfig?: Partial<AnalysisPerformanceConfig>;
 };
@@ -55,6 +63,8 @@ const DEFAULT_ANALYSIS_PERFORMANCE_CONFIG: AnalysisPerformanceConfig = {
   progressThrottleMs: 1000,
 };
 
+const DEFAULT_DETAIL_MODULE_LIMIT = 12;
+
 type AnalysisSchedulerTask = {
   analysisId: string;
   repositoryId: string;
@@ -72,12 +82,16 @@ export function createServer(deps: CreateServerDeps = {}) {
     deps.analyzeRepositoryHistoryImpl ?? analyzeRepositoryHistory;
   const detectRepositoryModulesImpl = deps.detectRepositoryModulesImpl ?? detectRepositoryModules;
   const probeLocalRepositoryImpl = deps.probeLocalRepositoryImpl ?? probeLocalRepository;
+  const readRepositoryHeadImpl = deps.readRepositoryHeadImpl ?? readRepositoryHead;
   const analysisPerformanceConfig = normalizeAnalysisPerformanceConfig(
     deps.analysisPerformanceConfig ?? readAnalysisPerformanceConfigFromEnv(process.env),
   );
   const analysisScheduler = createAnalysisScheduler({
     config: normalizeAnalysisSchedulerConfig(deps.analysisSchedulerConfig),
   });
+  const repositoryModulesCache = new Map<string, Promise<RepositoryModulesResponseDto>>();
+  const pendingRepositoryDeletions = new Set<string>();
+  const repositoryDeletionTasks = new Map<string, Promise<void>>();
 
   const app = Fastify({
     logger: true,
@@ -98,9 +112,35 @@ export function createServer(deps: CreateServerDeps = {}) {
   });
 
   app.addHook("onClose", async () => {
+    await Promise.allSettled(repositoryDeletionTasks.values());
     await analysisScheduler.close();
     storage.close();
   });
+
+  function isRepositoryPendingDeletion(repositoryId: string) {
+    return pendingRepositoryDeletions.has(repositoryId);
+  }
+
+  function enqueueRepositoryDeletion(repositoryId: string) {
+    if (repositoryDeletionTasks.has(repositoryId)) {
+      return;
+    }
+
+    pendingRepositoryDeletions.add(repositoryId);
+    const task = (async () => {
+      try {
+        await analysisScheduler.cancelRepository(repositoryId);
+        await storage.repositories.deleteById(repositoryId);
+      } catch (error) {
+        app.log.error({ err: error, repositoryId }, "repository deletion failed");
+      } finally {
+        pendingRepositoryDeletions.delete(repositoryId);
+        repositoryDeletionTasks.delete(repositoryId);
+      }
+    })();
+
+    repositoryDeletionTasks.set(repositoryId, task);
+  }
 
   app.get("/api/health", async () => {
     return {
@@ -112,7 +152,9 @@ export function createServer(deps: CreateServerDeps = {}) {
 
   app.get("/api/repositories", async () => {
     const repositories = await storage.repositories.list();
-    return repositories.map((repository) => repositoryTargetSchema.parse(repository));
+    return repositories
+      .filter((repository) => !isRepositoryPendingDeletion(repository.id))
+      .map((repository) => repositoryTargetSchema.parse(repository));
   });
 
   app.post("/api/repositories", async (request, reply) => {
@@ -160,10 +202,12 @@ export function createServer(deps: CreateServerDeps = {}) {
       return sendApiError(reply, 404, "repository_not_found", "repository was not found");
     }
 
-    await analysisScheduler.cancelRepository(params.id);
+    if (isRepositoryPendingDeletion(params.id)) {
+      return reply.code(202).send();
+    }
 
-    await storage.repositories.deleteById(params.id);
-    return reply.code(204).send();
+    enqueueRepositoryDeletion(params.id);
+    return reply.code(202).send();
   });
 
   app.get("/api/repositories/:id/modules", async (request, reply) => {
@@ -176,6 +220,14 @@ export function createServer(deps: CreateServerDeps = {}) {
     if (!repository) {
       return sendApiError(reply, 404, "repository_not_found", "repository was not found");
     }
+    if (isRepositoryPendingDeletion(params.id)) {
+      return sendApiError(
+        reply,
+        409,
+        "repository_deletion_in_progress",
+        "repository deletion is already in progress",
+      );
+    }
 
     if (!repository.localPath) {
       return sendApiError(
@@ -187,15 +239,36 @@ export function createServer(deps: CreateServerDeps = {}) {
     }
 
     try {
-      const modules = await detectRepositoryModulesImpl({
-        localPath: repository.localPath,
-        detectedKinds: repository.detectedKinds,
-      });
+      const localPath = repository.localPath;
+      const cacheKey = await createRepositoryModulesCacheKey(
+        localPath,
+        repository.detectedKinds,
+        readRepositoryHeadImpl,
+      );
+      const cached = repositoryModulesCache.get(cacheKey);
+      if (cached) {
+        return await cached;
+      }
 
-      return repositoryModulesResponseSchema.parse({
-        repositoryId: repository.id,
-        modules,
-      });
+      const loadPromise = (async () => {
+        const modules = await detectRepositoryModulesImpl({
+          localPath,
+          detectedKinds: repository.detectedKinds,
+        });
+
+        return repositoryModulesResponseSchema.parse({
+          repositoryId: repository.id,
+          modules,
+        });
+      })();
+
+      repositoryModulesCache.set(cacheKey, loadPromise);
+      try {
+        return await loadPromise;
+      } catch (error) {
+        repositoryModulesCache.delete(cacheKey);
+        throw error;
+      }
     } catch (error) {
       return sendApiError(reply, 400, "module_detection_failed", error);
     }
@@ -203,12 +276,46 @@ export function createServer(deps: CreateServerDeps = {}) {
 
   app.get("/api/analyses", async () => {
     const analyses = await storage.query.listAnalysisResults();
-    return analyses.map((analysis) => analysisResultSchema.parse(analysis));
+    return analyses
+      .filter((analysis) => !isRepositoryPendingDeletion(analysis.job.repositoryId))
+      .map((analysis) => analysisResultSchema.parse(analysis));
   });
 
   app.get("/api/analysis-summaries", async () => {
     const summaries = await storage.query.listAnalysisSummaries();
-    return summaries.map((summary) => analysisSummarySchema.parse(summary));
+    return summaries
+      .filter((summary) => !isRepositoryPendingDeletion(summary.job.repositoryId))
+      .map((summary) => analysisSummarySchema.parse(summary));
+  });
+
+  app.get("/api/analysis-summaries/:id", async (request, reply) => {
+    const params = analysisSummaryLookupParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return sendApiError(reply, 400, "invalid_analysis_id", "analysis id is required");
+    }
+
+    const summary = await storage.query.getAnalysisSummary(params.data.id);
+    if (!summary) {
+      return sendApiError(reply, 404, "analysis_not_found", "analysis was not found");
+    }
+
+    return analysisSummarySchema.parse(summary);
+  });
+
+  app.get("/api/analysis-details/:id", async (request, reply) => {
+    const params = analysisSummaryLookupParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return sendApiError(reply, 400, "invalid_analysis_id", "analysis id is required");
+    }
+
+    const detail = await storage.query.getAnalysisDetailSummary(params.data.id, {
+      defaultModuleLimit: DEFAULT_DETAIL_MODULE_LIMIT,
+    });
+    if (!detail) {
+      return sendApiError(reply, 404, "analysis_not_found", "analysis was not found");
+    }
+
+    return analysisDetailSummarySchema.parse(detail);
   });
 
   app.get("/api/analyses/:id", async (request, reply) => {
@@ -245,17 +352,21 @@ export function createServer(deps: CreateServerDeps = {}) {
       const raw = request.query as {
         analysisId?: string;
         metric?: string;
+        all?: string;
         moduleKeys?: string;
+        limit?: string;
       };
       const parsed = seriesQuerySchema.parse({
         analysisId: raw.analysisId,
         metric: raw.metric,
+        all: raw.all,
         moduleKeys: raw.moduleKeys
           ? raw.moduleKeys
               .split(",")
               .map((moduleKey) => moduleKey.trim())
               .filter(Boolean)
           : [],
+        limit: raw.limit,
       });
 
       const result = await storage.query.querySeries(parsed);
@@ -273,16 +384,22 @@ export function createServer(deps: CreateServerDeps = {}) {
     try {
       const raw = request.query as {
         analysisId?: string;
+        sampling?: string;
+        all?: string;
         moduleKeys?: string;
+        limit?: string;
       };
       const parsed = candlesQuerySchema.parse({
         analysisId: raw.analysisId,
+        sampling: raw.sampling,
+        all: raw.all,
         moduleKeys: raw.moduleKeys
           ? raw.moduleKeys
               .split(",")
               .map((moduleKey) => moduleKey.trim())
               .filter(Boolean)
           : [],
+        limit: raw.limit,
       });
 
       const result = await storage.query.queryCandles(parsed);
@@ -337,6 +454,14 @@ export function createServer(deps: CreateServerDeps = {}) {
     if (!repository) {
       return sendApiError(reply, 404, "repository_not_found", "repository was not found");
     }
+    if (isRepositoryPendingDeletion(payload.repositoryId)) {
+      return sendApiError(
+        reply,
+        409,
+        "repository_deletion_in_progress",
+        "repository deletion is already in progress",
+      );
+    }
 
     if (!repository.localPath) {
       return sendApiError(
@@ -347,18 +472,16 @@ export function createServer(deps: CreateServerDeps = {}) {
       );
     }
 
-    const existingDoneAnalysis = (await storage.query.listAnalysisSummaries()).find(
-      (summary) =>
-        summary.job.repositoryId === repository.id &&
-        summary.job.sampling === payload.sampling &&
-        summary.job.status === "done",
+    const existingDoneAnalysis = await storage.query.getLatestCompletedAnalysis(
+      repository.id,
+      payload.sampling,
     );
     if (existingDoneAnalysis) {
       return sendApiError(
         reply,
         409,
         "analysis_already_completed",
-        `repository already has a completed ${payload.sampling} analysis: ${existingDoneAnalysis.job.id}`,
+        `repository already has a completed ${payload.sampling} analysis: ${existingDoneAnalysis.id}`,
       );
     }
 
@@ -431,10 +554,7 @@ async function runAnalysisTask(input: {
   startedAt: string;
 }) {
   throwIfTaskAborted(input.abortSignal);
-  await input.storage.analysisJobs.updateJob(input.analysisId, (current) => ({
-    ...current,
-    status: "running",
-  }));
+  await updateAnalysisJobStatusIfChanged(input.storage, input.analysisId, "running");
   await input.storage.analysisJobs.upsertProgress(input.analysisId, {
     phase: "validating",
     percent: 0,
@@ -462,11 +582,9 @@ async function runAnalysisTask(input: {
       performance: input.analysisPerformanceConfig,
       onProgress: async (progress) => {
         throwIfTaskAborted(input.abortSignal);
-        await input.storage.analysisJobs.updateJob(input.analysisId, (current) => ({
-          ...current,
-          status:
-            progress.phase === "failed" ? "failed" : progress.phase === "done" ? "done" : "running",
-        }));
+        const nextStatus =
+          progress.phase === "failed" ? "failed" : progress.phase === "done" ? "done" : "running";
+        await updateAnalysisJobStatusIfChanged(input.storage, input.analysisId, nextStatus);
         await input.storage.analysisJobs.upsertProgress(input.analysisId, progress);
         throwIfTaskAborted(input.abortSignal);
       },
@@ -481,12 +599,16 @@ async function runAnalysisTask(input: {
     });
 
     const finishedAt = new Date().toISOString();
-    await input.storage.analysisJobs.updateJob(input.analysisId, (current) => ({
-      ...current,
-      status: "done",
-      finishedAt,
-      errorMessage: null,
-    }));
+    await input.storage.analysisJobs.updateJob(input.analysisId, (current) =>
+      current.status === "done" && current.finishedAt === finishedAt && current.errorMessage === null
+        ? current
+        : {
+            ...current,
+            status: "done",
+            finishedAt,
+            errorMessage: null,
+          },
+    );
     await input.storage.analysisJobs.upsertProgress(input.analysisId, {
       phase: "done",
       percent: 100,
@@ -806,7 +928,7 @@ async function markAnalysisAsFailed(
   message: string,
 ) {
   const finishedAt = new Date().toISOString();
-  const current = await storage.query.getAnalysisResult(analysisId);
+  const current = await storage.query.getAnalysisSummary(analysisId);
 
   await storage.analysisJobs.updateJob(analysisId, (job) => ({
     ...job,
@@ -828,6 +950,45 @@ async function markAnalysisAsFailed(
     startedAt,
     updatedAt: finishedAt,
   });
+}
+
+async function updateAnalysisJobStatusIfChanged(
+  storage: SqliteStorage,
+  analysisId: string,
+  status: "pending" | "running" | "done" | "failed",
+) {
+  await storage.analysisJobs.updateJob(analysisId, (current) =>
+    current.status === status
+      ? current
+      : {
+          ...current,
+          status,
+        },
+  );
+}
+
+async function readRepositoryHead(localPath: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync("git", [
+      "-C",
+      localPath,
+      "rev-parse",
+      "HEAD",
+    ]);
+    const head = stdout.trim();
+    return head.length > 0 ? head : null;
+  } catch {
+    return null;
+  }
+}
+
+async function createRepositoryModulesCacheKey(
+  localPath: string,
+  detectedKinds: Array<"rust" | "node" | "go" | "python" | "unknown">,
+  readRepositoryHeadImpl: typeof readRepositoryHead,
+) {
+  const head = await readRepositoryHeadImpl(localPath);
+  return [localPath, head ?? "no-head", detectedKinds.join(","), "modules"].join("\u0000");
 }
 
 function normalizeAnalysisSchedulerConfig(

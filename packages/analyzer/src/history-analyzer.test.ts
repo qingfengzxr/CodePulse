@@ -176,6 +176,124 @@ test("node/web analyzer falls back to directory modules when workspace is absent
   }
 });
 
+test("go analyzer detects go packages and analyzes go history by package", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "code-dance-analyzer-go-test-"));
+  const repoPath = join(dir, "go-repo");
+
+  try {
+    await mkdir(join(repoPath, "cmd/api"), { recursive: true });
+    await mkdir(join(repoPath, "pkg/core"), { recursive: true });
+
+    await writeFile(
+      join(repoPath, "go.mod"),
+      ["module github.com/acme/platform", "", "go 1.23", ""].join("\n"),
+    );
+    await writeFile(
+      join(repoPath, "main.go"),
+      ["package main", "", "func main() {", "  println(\"platform\")", "}", ""].join("\n"),
+    );
+    await writeFile(
+      join(repoPath, "pkg/core/value.go"),
+      ["package core", "", "func Value() int {", "  return 1", "}", ""].join("\n"),
+    );
+    await writeFile(
+      join(repoPath, "cmd/api/go.mod"),
+      ["module github.com/acme/platform/cmd/api", "", "go 1.23", ""].join("\n"),
+    );
+    await writeFile(
+      join(repoPath, "cmd/api/main.go"),
+      ["package main", "", "func main() {", "  println(\"api\")", "}", ""].join("\n"),
+    );
+
+    await git(repoPath, ["init"]);
+    await git(repoPath, ["config", "user.name", "Codex"]);
+    await git(repoPath, ["config", "user.email", "codex@example.com"]);
+    await git(repoPath, ["add", "."]);
+    await git(repoPath, ["commit", "-m", "initial go"], "2026-04-01T00:00:00Z");
+
+    await writeFile(
+      join(repoPath, "pkg/core/value.go"),
+      [
+        "package core",
+        "",
+        "func Value() int {",
+        "  value := 2",
+        "  return value",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
+      join(repoPath, "cmd/api/main.go"),
+      [
+        "package main",
+        "",
+        "func main() {",
+        "  println(\"api-v2\")",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    await git(repoPath, ["add", "."]);
+    await git(repoPath, ["commit", "-m", "expand go"], "2026-04-08T00:00:00Z");
+
+    const modules = await detectRepositoryModules({
+      localPath: repoPath,
+      detectedKinds: ["go"],
+    });
+
+    assert.deepEqual(modules.map((module) => module.key).sort(), [
+      "go:package:github.com/acme/platform",
+      "go:package:github.com/acme/platform/cmd/api",
+      "go:package:github.com/acme/platform/pkg/core",
+    ]);
+    assert.ok(modules.every((module) => module.kind === "go-package"));
+    assert.ok(modules.every((module) => module.files.every((filePath) => filePath.endsWith(".go"))));
+    assert.ok(modules.some((module) => module.files.includes("main.go")));
+    assert.ok(modules.some((module) => module.files.includes("pkg/core/value.go")));
+    assert.ok(modules.some((module) => module.files.includes("cmd/api/main.go")));
+
+    const result = await analyzeRepositoryHistory({
+      analysisId: "analysis-go-1",
+      localPath: repoPath,
+      branch: "HEAD",
+      sampling: "weekly",
+      detectedKinds: ["go"],
+      startedAt: "2026-04-09T00:00:00.000Z",
+    });
+
+    assert.equal(result.snapshots.length, 2);
+    assert.equal(result.points.length, 6);
+
+    const latestRootPoint = result.points.find(
+      (point) =>
+        point.moduleKey === "go:package:github.com/acme/platform" &&
+        point.ts === "2026-04-08T00:00:00+00:00",
+    );
+    const latestCorePoint = result.points.find(
+      (point) =>
+        point.moduleKey === "go:package:github.com/acme/platform/pkg/core" &&
+        point.ts === "2026-04-08T00:00:00+00:00",
+    );
+    const latestApiPoint = result.points.find(
+      (point) =>
+        point.moduleKey === "go:package:github.com/acme/platform/cmd/api" &&
+        point.ts === "2026-04-08T00:00:00+00:00",
+    );
+
+    assert.ok(latestRootPoint);
+    assert.ok(latestCorePoint);
+    assert.ok(latestApiPoint);
+    assert.ok(latestRootPoint.loc > 0);
+    assert.ok(latestCorePoint.loc > 0);
+    assert.ok(latestApiPoint.loc > 0);
+    assert.ok(latestCorePoint.churn > 0);
+    assert.ok(latestApiPoint.churn > 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("mixed rust and node repository aggregates analyzer outputs into one result", async () => {
   const dir = await mkdtemp(join(tmpdir(), "code-dance-analyzer-mixed-test-"));
   const repoPath = join(dir, "mixed-repo");
