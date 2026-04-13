@@ -386,6 +386,7 @@ export function createServer(deps: CreateServerDeps = {}) {
         analysisId?: string;
         sampling?: string;
         all?: string;
+        moduleKey?: string;
         moduleKeys?: string;
         limit?: string;
       };
@@ -393,6 +394,7 @@ export function createServer(deps: CreateServerDeps = {}) {
         analysisId: raw.analysisId,
         sampling: raw.sampling,
         all: raw.all,
+        moduleKey: raw.moduleKey,
         moduleKeys: raw.moduleKeys
           ? raw.moduleKeys
               .split(",")

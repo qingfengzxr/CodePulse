@@ -341,8 +341,10 @@ test("sqlite storage initializes schema and supports writes plus queries", async
 
     const candles = await storage.query.queryCandles({
       analysisId: "analysis-1",
+      moduleKey: "rust:crate:core",
     });
     assert.ok(candles);
+    assert.equal(candles.series.length, 1);
     assert.deepEqual(candles.series[0]?.values[1], {
       open: 10,
       high: 14,
@@ -350,14 +352,15 @@ test("sqlite storage initializes schema and supports writes plus queries", async
       close: 14,
     });
 
-    const limitedCandles = await storage.query.queryCandles({
+    const allCandles = await storage.query.queryCandles({
       analysisId: "analysis-1",
+      all: true,
       limit: 1,
     });
-    assert.ok(limitedCandles);
+    assert.ok(allCandles);
     assert.deepEqual(
-      limitedCandles.series.map((item) => item.moduleKey),
-      ["rust:crate:core"],
+      allCandles.series.map((item) => item.moduleKey),
+      ["rust:crate:core", "rust:crate:web"],
     );
 
     const distribution = await storage.query.queryDistribution({

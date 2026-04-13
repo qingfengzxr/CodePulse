@@ -133,6 +133,7 @@ export interface AnalysisResultQueryStore {
     analysisId: string;
     sampling?: AnalysisJob["sampling"];
     all?: boolean;
+    moduleKey?: string;
     moduleKeys?: string[];
     limit?: number;
   }): Promise<CandlesResult | null>;
@@ -539,6 +540,7 @@ export function createSqliteStorage(options?: { dbPath?: string }): SqliteStorag
           const perCommitResult = buildCandlesResult(db, {
             analysisId: perCommitAnalysis.id,
             all: input.all,
+            moduleKey: input.moduleKey,
             moduleKeys: input.moduleKeys,
             limit: input.limit,
           });
@@ -549,6 +551,7 @@ export function createSqliteStorage(options?: { dbPath?: string }): SqliteStorag
       return buildCandlesResult(db, {
         analysisId: input.analysisId,
         all: input.all,
+        moduleKey: input.moduleKey,
         moduleKeys: input.moduleKeys,
         limit: input.limit,
       });
@@ -902,12 +905,17 @@ function resolveRequestedModuleKeys(
     analysisId: string;
     metric: AnalysisMetric;
     all?: boolean;
+    moduleKey?: string;
     moduleKeys?: string[];
     limit?: number;
   },
 ) {
   if (input.all) {
     return null;
+  }
+
+  if (input.moduleKey) {
+    return [input.moduleKey];
   }
 
   if (input.moduleKeys && input.moduleKeys.length > 0) {
@@ -992,11 +1000,27 @@ function readCandleRows(db: Database.Database, analysisId: string, moduleKeys: s
     .all(analysisId, ...moduleKeys) as CandleSeriesRow[];
 }
 
+function readSingleModuleCandleRows(
+  db: Database.Database,
+  analysisId: string,
+  moduleKey: string,
+) {
+  return db
+    .prepare(
+      `select snapshot_seq, module_key, module_name, module_kind, open, high, low, close
+       from module_candles
+       where analysis_id = ? and module_key = ?
+       order by snapshot_seq asc`,
+    )
+    .all(analysisId, moduleKey) as CandleSeriesRow[];
+}
+
 function buildCandlesResult(
   db: Database.Database,
   input: {
     analysisId: string;
     all?: boolean;
+    moduleKey?: string;
     moduleKeys?: string[];
     limit?: number;
   },
@@ -1013,10 +1037,13 @@ function buildCandlesResult(
     analysisId: input.analysisId,
     metric: "loc",
     all: input.all,
+    moduleKey: input.moduleKey,
     moduleKeys: input.moduleKeys,
     limit: input.limit,
   });
-  const rows = readCandleRows(db, input.analysisId, moduleKeys);
+  const rows = input.moduleKey
+    ? readSingleModuleCandleRows(db, input.analysisId, input.moduleKey)
+    : readCandleRows(db, input.analysisId, moduleKeys);
   const seqToIndex = new Map(timeline.map((snapshot, index) => [snapshot.seq, index]));
   const grouped = new Map<
     string,

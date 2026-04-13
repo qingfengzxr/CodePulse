@@ -93,6 +93,7 @@ export function AnalysisDetailPage({
   const [activeChartIndex, setActiveChartIndex] = useState(0);
   const [rankingMetric, setRankingMetric] = useState<MetricKey>("loc");
   const [rankingVisibleCount, setRankingVisibleCount] = useState<8 | 16>(8);
+  const [selectedCandlesModuleKey, setSelectedCandlesModuleKey] = useState<string | null>(null);
   const [samplingActionLoading, setSamplingActionLoading] = useState<AnalysisSamplingDto | null>(
     null,
   );
@@ -103,6 +104,7 @@ export function AnalysisDetailPage({
     setActiveChartIndex(0);
     setRankingMetric("loc");
     setRankingVisibleCount(8);
+    setSelectedCandlesModuleKey(null);
     setQueryError(null);
     setDetailSummary(null);
     queryCache.clear();
@@ -155,8 +157,8 @@ export function AnalysisDetailPage({
   const defaultModuleKeys = detailSummary?.defaultModuleKeys ?? [];
   const seriesQueryKey = (metric: MetricKey, moduleKeys?: string[] | null, all = false) =>
     `series:${currentAnalysisId}:${metric}:${all ? "__all__" : moduleKeys === null ? "__default__" : (moduleKeys ?? []).join(",")}`;
-  const candlesQueryKey = (moduleKeys: string[], sampling?: AnalysisSamplingDto, all = false) =>
-    `candles:${currentAnalysisId}:${sampling ?? ""}:${all ? "__all__" : moduleKeys.join(",")}`;
+  const candlesQueryKey = (moduleKey: string, sampling?: AnalysisSamplingDto) =>
+    `candles:${currentAnalysisId}:${sampling ?? ""}:module:${moduleKey}`;
   const rankingQueryKey = (metric: MetricKey, limit: 8 | 16) =>
     `ranking:${currentAnalysisId}:${metric}:${limit}`;
 
@@ -194,26 +196,18 @@ export function AnalysisDetailPage({
     }
   };
 
-  const loadCandles = async (
-    moduleKeys = defaultModuleKeys,
-    sampling = detailSummary?.job.sampling,
-    all = false,
-  ) => {
+  const loadCandles = async (moduleKey: string, sampling = detailSummary?.job.sampling) => {
     if (!analysisId) {
       return null;
     }
 
     try {
-      return await queryCache.load(candlesQueryKey(moduleKeys, sampling, all), async () => {
+      return await queryCache.load(candlesQueryKey(moduleKey, sampling), async () => {
         const params = new URLSearchParams({ analysisId });
         if (sampling) {
           params.set("sampling", sampling);
         }
-        if (all) {
-          params.set("all", "true");
-        } else if (moduleKeys.length > 0) {
-          params.set("moduleKeys", moduleKeys.join(","));
-        }
+        params.set("moduleKey", moduleKey);
         const response = await fetch(`/api/candles?${params.toString()}`);
         if (!response.ok) {
           const payload = (await response.json().catch(() => null)) as ApiError | null;
@@ -282,7 +276,9 @@ export function AnalysisDetailPage({
     }
 
     if (activeChartId === "candlestick") {
-      void loadCandles();
+      if (selectedCandlesModuleKey) {
+        void loadCandles(selectedCandlesModuleKey);
+      }
       return;
     }
 
@@ -323,6 +319,7 @@ export function AnalysisDetailPage({
     detailSummary?.job.status,
     rankingMetric,
     rankingVisibleCount,
+    selectedCandlesModuleKey,
   ]);
 
   const currentAnalysis = detailSummary ?? null;
@@ -339,14 +336,6 @@ export function AnalysisDetailPage({
   const churnSeries =
     queryCache.get<SeriesResponseDto>(seriesQueryKey("churn", defaultModuleKeys)) ?? null;
   const fullChurnSeries = queryCache.get<SeriesResponseDto>(seriesQueryKey("churn", null, true)) ?? null;
-  const candles =
-    queryCache.get<CandlesResponseDto>(
-      candlesQueryKey(defaultModuleKeys, detailSummary?.job.sampling),
-    ) ?? null;
-  const fullCandles =
-    queryCache.get<CandlesResponseDto>(
-      candlesQueryKey(defaultModuleKeys, detailSummary?.job.sampling, true),
-    ) ?? null;
   const rankingResponse =
     queryCache.get<RankingResponseDto>(rankingQueryKey(rankingMetric, rankingVisibleCount)) ?? null;
   const seriesByMetric: Partial<Record<MetricKey, SeriesResponseDto>> = {
@@ -369,6 +358,42 @@ export function AnalysisDetailPage({
   const defaultModuleCount = locSeries?.series.length ?? 0;
   const fullModuleCount = fullLocSeries?.series.length ?? null;
   const topModule = locSeries ? buildMetricSeriesFromQuery(locSeries).modules[0] : null;
+  const initialCandlesModuleKey = topModule?.key ?? defaultModuleKeys[0] ?? modules[0]?.key ?? null;
+  const candlesModuleKey = selectedCandlesModuleKey ?? initialCandlesModuleKey;
+  const candles = candlesModuleKey
+    ? queryCache.get<CandlesResponseDto>(candlesQueryKey(candlesModuleKey, detailSummary?.job.sampling)) ?? null
+    : null;
+  const candlesLoading = candlesModuleKey
+    ? queryCache.isPending(candlesQueryKey(candlesModuleKey, detailSummary?.job.sampling))
+    : false;
+  const rankedLocModules = locSeries ? buildMetricSeriesFromQuery(locSeries).modules : [];
+  const candidateModules = useMemo(() => {
+    const latestLocByKey = new Map(rankedLocModules.map((module) => [module.key, module.latestValue]));
+    const moduleByKey = new Map(modules.map((module) => [module.key, module]));
+    const orderedKeys = Array.from(
+      new Set([
+        ...rankedLocModules.map((module) => module.key),
+        ...defaultModuleKeys,
+        ...modules.map((module) => module.key),
+      ]),
+    );
+
+    return orderedKeys
+      .map((key) => {
+        const module = moduleByKey.get(key);
+        if (!module) {
+          return null;
+        }
+
+        return {
+          key: module.key,
+          name: module.name,
+          kind: module.kind,
+          latestClose: latestLocByKey.get(module.key) ?? 0,
+        };
+      })
+      .filter((module): module is { key: string; name: string; kind: string; latestClose: number } => Boolean(module));
+  }, [defaultModuleKeys, modules, rankedLocModules]);
   const siblingAnalysesBySampling = repository
     ? samplingOptions.map((sampling) => ({
         sampling,
@@ -378,6 +403,24 @@ export function AnalysisDetailPage({
         ),
       }))
     : [];
+
+  useEffect(() => {
+    if (!initialCandlesModuleKey) {
+      return;
+    }
+
+    if (!selectedCandlesModuleKey) {
+      if (!topModule && locSeries === null) {
+        return;
+      }
+      setSelectedCandlesModuleKey(initialCandlesModuleKey);
+      return;
+    }
+
+    if (!candidateModules.some((module) => module.key === selectedCandlesModuleKey)) {
+      setSelectedCandlesModuleKey(initialCandlesModuleKey);
+    }
+  }, [candidateModules, initialCandlesModuleKey, locSeries, selectedCandlesModuleKey, topModule]);
 
   const chartCards = useMemo<ChartCard[]>(() => {
     return [
@@ -587,21 +630,24 @@ export function AnalysisDetailPage({
         title: t("chart.candles.titleFallback"),
         description: t("chart.candles.description"),
         summary: [
-          fullCandles
-            ? t("chart.candles.summary.candidatesAll", { count: formatNumber(fullCandles.series.length) })
-            : t("chart.candles.summary.candidatesTop", { count: formatNumber(candles?.series.length ?? 0) }),
-          t("chart.candles.summary.currentPair", { name: topModule?.name ?? "-" }),
+          t("chart.candles.summary.candidatesAll", { count: formatNumber(candidateModules.length) }),
+          t("chart.candles.summary.currentPair", {
+            name:
+              candidateModules.find((module) => module.key === candlesModuleKey)?.name ??
+              topModule?.name ??
+              "-",
+          }),
         ],
-        content: candles ? (
+        content: candlesModuleKey ? (
           <ModuleCandlestickChart
-            allCandles={fullCandles}
-            allCandlesLoading={queryCache.isPending(
-              candlesQueryKey(defaultModuleKeys, detailSummary?.job.sampling, true),
-            )}
             candles={candles}
-            onRequestAllCandles={() => {
-              void loadCandles(defaultModuleKeys, detailSummary?.job.sampling, true);
+            loading={candlesLoading}
+            modules={candidateModules}
+            onSelectModule={(moduleKey) => {
+              setSelectedCandlesModuleKey(moduleKey);
+              void loadCandles(moduleKey);
             }}
+            selectedModuleKey={candlesModuleKey}
             showHeader={false}
           />
         ) : (
@@ -677,11 +723,13 @@ export function AnalysisDetailPage({
       },
     ];
   }, [
+    candidateModules,
     candles,
+    candlesLoading,
+    candlesModuleKey,
     currentAnalysis?.job.id,
     currentAnalysisId,
     defaultModuleCount,
-    fullCandles,
     fullChurnSeries,
     fullLocSeries,
     formatNumber,

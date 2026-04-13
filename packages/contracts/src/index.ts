@@ -156,8 +156,27 @@ export const candlesQuerySchema = z.object({
   analysisId: z.string().min(1),
   sampling: analysisSamplingSchema.optional(),
   all: z.coerce.boolean().default(false),
+  moduleKey: z.string().min(1).optional(),
   moduleKeys: z.array(z.string().min(1)).default([]),
   limit: z.coerce.number().int().positive().max(100).optional(),
+}).superRefine((value, ctx) => {
+  const scopeCount = Number(value.all) + Number(Boolean(value.moduleKey)) + Number(value.moduleKeys.length > 0);
+
+  if (scopeCount === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "one of all, moduleKey, or moduleKeys is required",
+      path: ["moduleKey"],
+    });
+  }
+
+  if (scopeCount > 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "all, moduleKey, and moduleKeys are mutually exclusive",
+      path: ["moduleKey"],
+    });
+  }
 });
 
 export const candleSeriesSchema = z.object({

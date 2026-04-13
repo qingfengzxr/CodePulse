@@ -372,9 +372,10 @@ test("api persists analyses and serves query endpoints from sqlite", async () =>
 
     const candlesResponse = await app.inject({
       method: "GET",
-      url: `/api/candles?analysisId=${initial.job.id}&moduleKeys=rust:crate:core`,
+      url: `/api/candles?analysisId=${initial.job.id}&moduleKey=rust:crate:core`,
     });
     assert.equal(candlesResponse.statusCode, 200);
+    assert.equal(candlesResponse.json().series.length, 1);
     assert.equal(candlesResponse.json().series[0].values[1].high, 14);
 
     const defaultSeriesResponse = await app.inject({
@@ -391,11 +392,7 @@ test("api persists analyses and serves query endpoints from sqlite", async () =>
       method: "GET",
       url: `/api/candles?analysisId=${initial.job.id}&limit=1`,
     });
-    assert.equal(defaultCandlesResponse.statusCode, 200);
-    assert.deepEqual(
-      defaultCandlesResponse.json().series.map((item: { moduleKey: string }) => item.moduleKey),
-      ["rust:crate:core"],
-    );
+    assert.equal(defaultCandlesResponse.statusCode, 400);
 
     const rankingResponse = await app.inject({
       method: "GET",

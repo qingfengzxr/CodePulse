@@ -20,10 +20,16 @@ import { useThemeMode } from "../theme";
 import { getChartTokens } from "./chart-helpers";
 
 type ModuleCandlestickChartProps = {
-  candles: CandlesResponseDto;
-  allCandles?: CandlesResponseDto | null;
-  allCandlesLoading?: boolean;
-  onRequestAllCandles?: () => void;
+  candles: CandlesResponseDto | null;
+  loading?: boolean;
+  modules: Array<{
+    key: string;
+    name: string;
+    kind: string;
+    latestClose: number;
+  }>;
+  onSelectModule: (moduleKey: string) => void;
+  selectedModuleKey: string | null;
   showHeader?: boolean;
 };
 
@@ -31,9 +37,10 @@ type FocusMode = 8 | 16 | "all";
 
 export function ModuleCandlestickChart({
   candles,
-  allCandles,
-  allCandlesLoading = false,
-  onRequestAllCandles,
+  loading = false,
+  modules,
+  onSelectModule,
+  selectedModuleKey,
   showHeader = true,
 }: ModuleCandlestickChartProps) {
   const { t, formatDate } = useI18n();
@@ -44,36 +51,29 @@ export function ModuleCandlestickChart({
   const seriesRef = useRef<ISeriesApi<"Candlestick", Time> | null>(null);
   const themeMode = useThemeMode();
   const [focusMode, setFocusMode] = useState<FocusMode>(8);
-  const [selectedModuleKey, setSelectedModuleKey] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const requiresExpandedCandles = focusMode !== "all" && candles.series.length < focusMode;
-  const effectiveCandles =
-    (focusMode === "all" || requiresExpandedCandles) && allCandles ? allCandles : candles;
-  const expandedCandlesRequested = focusMode === "all" || requiresExpandedCandles;
-  const data = useMemo(
-    () => buildCandlestickSeriesFromQuery(effectiveCandles),
-    [effectiveCandles],
+  const currentSeries = useMemo(
+    () => (candles ? buildCandlestickSeriesFromQuery(candles).modules[0] ?? null : null),
+    [candles],
   );
-
-  const rankedModules = [...data.modules].sort((left, right) => {
-    const leftClose = left.latestClose;
-    const rightClose = right.latestClose;
-    if (rightClose !== leftClose) {
-      return rightClose - leftClose;
-    }
-
-    return left.name.localeCompare(right.name);
-  });
-  const visibleModules = focusMode === "all" ? rankedModules : rankedModules.slice(0, focusMode);
+  const visibleModules = focusMode === "all" ? modules : modules.slice(0, focusMode);
   const filteredModules = visibleModules.filter((module) =>
     module.name.toLowerCase().includes(searchQuery.trim().toLowerCase()),
   );
   const selectedModule =
-    visibleModules.find((module) => module.key === selectedModuleKey) ?? visibleModules[0] ?? null;
+    modules.find((module) => module.key === selectedModuleKey) ??
+    visibleModules[0] ??
+    null;
 
   useEffect(() => {
-    setSelectedModuleKey(visibleModules[0]?.key ?? null);
-  }, [effectiveCandles.analysisId, focusMode, visibleModules[0]?.key]);
+    if (!visibleModules.length) {
+      return;
+    }
+
+    if (!selectedModuleKey || !visibleModules.some((module) => module.key === selectedModuleKey)) {
+      onSelectModule(visibleModules[0].key);
+    }
+  }, [onSelectModule, selectedModuleKey, visibleModules]);
 
   useEffect(() => {
     const surface = surfaceRef.current;
@@ -185,8 +185,11 @@ export function ModuleCandlestickChart({
     }
 
     const tokens = getChartTokens();
-    const selectedCandles = selectedModule?.candles ?? [];
-    const chartData = buildChartData(data.xAxis, selectedCandles);
+    const selectedCandles = currentSeries?.candles ?? [];
+    const chartData = buildChartData(
+      candles?.timeline.map((snapshot) => snapshot.ts) ?? [],
+      selectedCandles,
+    );
     const candleByTime = new Map<number, { label: string; candle: (typeof selectedCandles)[number] }>(
       chartData.map((point, index) => [
         point.time as number,
@@ -297,7 +300,7 @@ export function ModuleCandlestickChart({
     return () => {
       chart.unsubscribeCrosshairMove(handleCrosshairMove);
     };
-  }, [data.xAxis, formatDate, selectedModule, t, themeMode]);
+  }, [candles, currentSeries, formatDate, selectedModule, t, themeMode]);
 
   return (
     <div className="chart-panel">
@@ -332,12 +335,7 @@ export function ModuleCandlestickChart({
                   aria-pressed={focusMode === option}
                   className={`chart-toggle-button ${focusMode === option ? "active" : ""}`}
                   key={String(option)}
-                  onClick={() => {
-                    setFocusMode(option as FocusMode);
-                    if (option === "all" || (typeof option === "number" && candles.series.length < option)) {
-                      onRequestAllCandles?.();
-                    }
-                  }}
+                  onClick={() => setFocusMode(option as FocusMode)}
                   type="button"
                 >
                   {option === "all"
@@ -362,18 +360,14 @@ export function ModuleCandlestickChart({
       <div className="chart-filter-bar">
         <div className="chart-summary">
           <span className="chart-chip">
-            {focusMode === "all" && allCandles
+            {focusMode === "all"
               ? t("chart.candles.summary.candidatesAll", { count: String(visibleModules.length) })
-              : focusMode === "all" && allCandlesLoading
-                ? t("action.loadAllCandidates")
-                : t("chart.candles.summary.candidatesTop", { count: String(visibleModules.length) })}
+              : t("chart.candles.summary.candidatesTop", { count: String(visibleModules.length) })}
           </span>
-            <span className="chart-chip chart-chip-muted">{t("chart.candles.ohlcSource")}</span>
+          <span className="chart-chip chart-chip-muted">{t("chart.candles.ohlcSource")}</span>
         </div>
       </div>
-      {expandedCandlesRequested && allCandlesLoading && !allCandles ? (
-        <p className="feedback">{t("action.loadAllCandidates")}...</p>
-      ) : null}
+      {loading ? <p className="feedback">{t("chart.empty.loadCandles")}</p> : null}
 
       <div className="module-selector">
         {filteredModules.map((module) => (
@@ -381,7 +375,7 @@ export function ModuleCandlestickChart({
             aria-pressed={selectedModule?.key === module.key}
             className={`module-selector-pill ${selectedModule?.key === module.key ? "active" : ""}`}
             key={module.key}
-            onClick={() => setSelectedModuleKey(module.key)}
+            onClick={() => onSelectModule(module.key)}
             type="button"
           >
             <strong>{module.name}</strong>
@@ -400,6 +394,7 @@ export function ModuleCandlestickChart({
         <div className="tradingview-chart-host" ref={containerRef} />
         <div className="tradingview-tooltip" ref={tooltipRef} />
       </div>
+      {!loading && !currentSeries ? <p className="feedback">{t("chart.empty.waitCandles")}</p> : null}
     </div>
   );
 }

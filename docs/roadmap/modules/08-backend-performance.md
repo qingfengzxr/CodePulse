@@ -36,7 +36,7 @@
 
 ## 当前进展
 
-截至 2026-04-10，本模块已经完成第一阶段止血，并完成第二、三、四阶段中的高收益改造项，当前状态为“进行中”。
+截至 2026-04-13，本模块已经完成第一阶段止血，并完成第二、三、四阶段中的高收益改造项，当前状态为“进行中”。
 
 ### 已完成
 
@@ -49,6 +49,10 @@
 - `listAnalysisSummaries()` 已去掉 latest snapshot 的 N+1
 - 新建分析前的重复完成分析检查已改为定向查询
 - `ranking` 已把 `limit` 下推到 SQL
+- K 线图已改为按单模块懒加载：
+  - `/api/candles` 默认调用要求显式 scope
+  - 详情页切换模块时再按 `moduleKey` 请求
+  - 页面级缓存按 `analysisId + sampling + moduleKey` 命中
 - 失败收尾路径已移除对整份 `getAnalysisResult()` 的依赖
 - 模块探测已增加基于仓库 `HEAD` 的进程内缓存
 - 热点索引已补齐，覆盖 `analysis_id + snapshot_seq/module_key` 等主要读取路径
@@ -65,12 +69,14 @@
 ### 仍在进行中
 
 - `series` / `candles` 的结果体积和查询策略还没有彻底收口
+- `candles` 已收紧为单模块优先，但批量 `moduleKeys` / `all=true` 仍保留为兼容过渡路径
 - 分析运行过程中的 SQLite 读写争用还没有系统性压低
 - 还没基于真实大仓库数据完成 profiling 前后对照
 
 ### 下一步
 
 - 继续收紧 `series` / `candles` 的读取范围和默认行为
+- 继续把 `series` 的默认查询路径向更显式的模块范围收口
 - 进一步压低分析运行过程的高频写入干扰
 - 在真实大仓库上完成 profiling、慢查询定位和索引复核
 
@@ -235,7 +241,10 @@
 #### Series / Candles
 
 - 收紧默认查询策略
-- 优先支持明确 `moduleKeys`
+- `series` 继续优先支持明确 `moduleKeys`
+- `candles` 默认查询改为显式单 `moduleKey`
+- K 线图切换模块时再加载对应 `candles`
+- 页面级查询缓存按 `analysisId + sampling + moduleKey` 生效
 - 为后续 Top N 或聚合视图留接口空间
 
 #### Summary
@@ -427,7 +436,7 @@
 - [ ] 继续减少进度写库频率
 - [x] 设计模块探测缓存
 - [ ] 准备真实数据样本做 profiling
-- [ ] 继续收紧 `series` / `candles` 查询范围
+- [ ] 继续收紧 `series` 查询范围
 - [ ] 基于 profiling 结果复核索引和慢查询
 
 ## 完成定义
@@ -445,5 +454,33 @@
 
 这轮性能治理已经完成“止血”和“高收益查询治理”，当前剩余工作主要集中在两块：
 
-- 更深层的 `series` / `candles` 读取收口
+- 更深层的 `series` 读取收口，以及 `candles` 过渡兼容路径的后续清理
 - 基于真实大仓库数据的 profiling 与进一步索引复核
+
+## 本次子任务进展
+
+### 已确认现状
+
+- 详情页此前已经做到“按图表懒加载”，但 K 线仍是 tab 激活后一次请求默认模块集合
+- 模块切换此前只是在前端已加载的 `candles.series` 中切换，没有单模块请求边界
+
+### 已锁定方案
+
+- 采用“最小闭环”：
+  - 保留 `moduleKeys` / `all=true` 兼容能力
+  - 默认 UI 路径改为单 `moduleKey` 请求
+  - 服务端对无 `all/moduleKey/moduleKeys` 的 `candles` 请求返回 `400`
+
+### 已完成开发
+
+- `apps/web` 已为 K 线引入独立 `selectedCandlesModuleKey`
+- `AnalysisDetailPage` 已改为仅请求当前选中模块的 `candles`
+- `ModuleCandlestickChart` 已改成受控组件，模块切换时按需触发单模块加载
+- `apps/api` / `packages/storage` 已支持 `moduleKey` 查询，并对单模块路径走更窄的读取分支
+
+### 验证标准
+
+- 首次进入 K 线 tab 只请求当前默认模块的 1 次 `candles`
+- 切换模块时只新增当前模块的 1 次请求
+- 切回已访问模块时命中页面缓存，不重复请求
+- 缺少 `all/moduleKey/moduleKeys` 的 `GET /api/candles` 请求返回 `400`
