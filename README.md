@@ -2,11 +2,13 @@
 
 Analyze how a Git repository evolves over time.
 
-> Joke of the day: which module just hit limit-down? Check the module candlestick chart.
+Languages: **English** | [简体中文](./README.zh-CN.md)
 
 CodeDance is a local-first repository history analysis toolkit. It scans Git history, detects modules, computes time-series metrics such as LOC, added, deleted, and churn, persists the results, and exposes them through a local API and web UI.
 
-Languages: **English** | [简体中文](./README.zh-CN.md)
+> Joke of the day: which module just hit limit-down? Check the module candlestick chart.
+
+![](/public/imgs/image.png)
 
 ## What CodeDance Does
 
@@ -20,11 +22,24 @@ CodeDance is built to answer questions like:
 Current focus:
 
 - Analyze Git repository history from a local path
-- Detect modules for Rust and Node/Web repositories
+- Detect modules for Rust, Node/Web, and Go repositories
 - Compute module-level `loc`, `added`, `deleted`, and `churn`
 - Support `weekly`, `daily`, and `per-commit` sampling
 - Persist analysis results into local SQLite
-- Explore results in a React-based web UI
+- Explore results in a React-based web UI with locale and theme preferences
+
+## Supported Languages
+
+Repository analysis currently supports:
+
+- Rust: workspace / crate structure
+- Node.js / Web: workspace / package structure plus fallback heuristics
+- Go: module / package structure
+
+Web UI locale currently supports:
+
+- English (`en`)
+- Simplified Chinese (`zh-CN`)
 
 ## Architecture
 
@@ -57,15 +72,19 @@ domain    <-> analyzer/storage
 
 - Register a local Git repository from the web UI
 - Detect repository kind and modules
+- Run Rust, Node/Web, and Go analyzers in one analysis pipeline when applicable
 - Run asynchronous history analysis jobs with progress reporting
 - Store analysis snapshots and module metrics in SQLite
 - Query summaries, modules, series, distributions, and rankings
-- Render trend, ranking, stacked area, and candlestick-style charts
+- Switch the web UI between English and Simplified Chinese
+- Switch between `light`, `dark`, and `system` theme modes
+- Render repository scale, trend, ranking, stacked/share area, lifecycle, heatmap, bump, scatter, and candlestick views
 
 Module detection currently supports:
 
 - Rust workspace / crate structure
 - Node workspace / package structure
+- Go module / package structure
 - Node/Web fallback heuristics for repositories without workspace config
 
 ## Quick Start
@@ -154,15 +173,17 @@ Completed:
 - Monorepo workspace
 - Local API and web UI
 - SQLite persistence
-- Rust and Node/Web module detection
+- Rust, Node/Web, and Go module detection
 - History analysis with sampling-aware result storage
 - Progress reporting for asynchronous analysis jobs
+- Web locale switch for `en` and `zh-CN`
+- Light/dark/system theme preference plumbing
 
 Planned:
 
 - Configurable manual module rules and fallback providers
 - Better duplicate-run detection and caching
-- More event-oriented history views
+- More event-oriented history views and semantic polish
 - TUI support built on top of the same data interfaces
 
 ## License

@@ -2,11 +2,13 @@
 
 分析 Git 仓库如何随时间演化。
 
-> 讲个笑话🤣：你的哪个模块跌停了？看看模块K线图吧！
+语言版本：[English](./README.md) | **简体中文**
 
 CodeDance 是一个本地优先的仓库历史分析工具。它会扫描 Git 历史、识别模块、计算 `LOC`、`added`、`deleted`、`churn` 等时间序列指标，把结果持久化到本地，再通过本地 API 和 Web UI 展示出来。
 
-语言版本：[English](./README.md) | **简体中文**
+> 讲个笑话🤣：你的哪个模块跌停了？看看模块K线图吧！
+
+![](/public/imgs/image.png)
 
 ## 项目目标
 
@@ -20,11 +22,24 @@ CodeDance 主要回答这类问题：
 当前重点能力：
 
 - 从本地路径分析 Git 仓库历史
-- 识别 Rust 与 Node/Web 仓库的模块
+- 识别 Rust、Node/Web、Go 仓库的模块
 - 生成模块级 `loc`、`added`、`deleted`、`churn`
 - 支持 `weekly`、`daily`、`per-commit` 三种采样方式
 - 将分析结果持久化到本地 SQLite
-- 在 React Web 页面中查看结果
+- 在 React Web 页面中查看结果，并支持语言与主题偏好
+
+## 支持语言
+
+当前仓库分析能力支持：
+
+- Rust：workspace / crate 结构
+- Node.js / Web：workspace / package 结构，以及无 workspace 时的 fallback 启发式识别
+- Go：module / package 结构
+
+当前 Web 界面语言支持：
+
+- English (`en`)
+- 简体中文 (`zh-CN`)
 
 ## 架构概览
 
@@ -57,15 +72,19 @@ domain    <-> analyzer/storage
 
 - 在 Web 页面中注册本地 Git 仓库
 - 探测仓库类型和模块结构
+- 在同一条分析链路中按需组合运行 Rust、Node/Web、Go 分析器
 - 异步执行历史分析任务，并实时显示进度
 - 将分析结果写入 SQLite
 - 查询分析摘要、模块列表、趋势序列、分布和排行
-- 展示趋势图、排行图、堆叠面积图和 K 线风格图表
+- 支持中英文界面切换
+- 支持 `light`、`dark`、`system` 主题模式
+- 展示仓库规模、趋势、排行、堆叠/占比面积、生命周期、热力、Bump、风险散点与 K 线等视图
 
 当前模块识别支持：
 
 - Rust workspace / crate
 - Node workspace / package
+- Go module / package
 - 对没有 workspace 配置的 Node/Web 仓库使用启发式 fallback 规则
 
 ## 快速启动
@@ -154,15 +173,17 @@ pnpm dev:web
 - monorepo 工作区骨架
 - 本地 API 与 Web UI
 - SQLite 持久化
-- Rust 与 Node/Web 模块探测
+- Rust、Node/Web、Go 模块探测
 - 支持多种采样维度的历史分析
 - 异步分析任务与进度展示
+- `en` / `zh-CN` Web 多语言切换
+- `light` / `dark` / `system` 主题偏好基础能力
 
 计划中：
 
 - 可配置的手工模块规则与 fallback provider
 - 更好的重复分析检测与缓存
-- 更丰富的事件型历史视图
+- 更丰富的事件型历史视图与图表语义打磨
 - 基于同一套数据接口的 TUI
 
 ## 许可证
