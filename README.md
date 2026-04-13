@@ -6,7 +6,7 @@ Languages: **English** | [简体中文](./README.zh-CN.md)
 
 CodeDance is a local-first repository history analysis toolkit. It scans Git history, detects modules, computes time-series metrics such as LOC, added, deleted, and churn, persists the results, and exposes them through a local API and web UI.
 
-> Joke of the day: which module just hit limit-down? Check the module candlestick chart.
+> Joke of the day🤣: which module just hit limit-down? Check the module candlestick chart.
 
 ![](/public/imgs/image.png)
 
