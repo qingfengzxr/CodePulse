@@ -42,6 +42,7 @@ export function ModuleRiskScatterChart({
   const sizeValues = points.map((point) => point.sizeMetric);
   const minSizeMetric = Math.min(...sizeValues, 1);
   const maxSizeMetric = Math.max(...sizeValues, 1);
+  type ScatterPoint = [number, number, number, string, string, number, number, number, string];
 
   useEffect(() => {
     if (!containerRef.current) {
@@ -54,8 +55,8 @@ export function ModuleRiskScatterChart({
     window.addEventListener("resize", handleResize);
 
     chart.on("click", (params) => {
-      const data = params.data as [number, number, number, string, string, number, number, string] | undefined;
-      setSelectedModuleKey(data?.[7] ?? null);
+      const data = params.data as ScatterPoint | undefined;
+      setSelectedModuleKey(data?.[8] ?? null);
     });
 
     return () => {
@@ -79,7 +80,7 @@ export function ModuleRiskScatterChart({
         tooltip: {
           ...createBaseTooltip((paramsRaw: unknown) => {
             const params = paramsRaw as {
-              data?: [number, number, number, string, string, number, number, string];
+              data?: ScatterPoint;
             };
             const data = params.data;
             if (!data) {
@@ -90,9 +91,9 @@ export function ModuleRiskScatterChart({
               `<strong>${escapeHtml(data[3])}</strong>`,
               escapeHtml(data[4]),
               `${escapeHtml(t("label.currentLoc"))}: ${formatMetricValue(data[0])}`,
-              `${escapeHtml(t("metric.churn"))}: ${formatMetricValue(data[1])}`,
-              `${escapeHtml(t("chart.risk.tooltip.recentAverage"))}: ${formatMetricValue(data[5])}`,
-              `${escapeHtml(t("chart.risk.tooltip.peak"))}: ${formatMetricValue(data[6])}`,
+              `${escapeHtml(t("chart.risk.tooltip.recentAverage"))}: ${formatMetricValue(data[1])}`,
+              `${escapeHtml(t("chart.risk.tooltip.latest"))}: ${formatMetricValue(data[5])}`,
+              `${escapeHtml(t("chart.risk.tooltip.peak"))}: ${formatMetricValue(data[7])}`,
             ].join("<br/>");
           }, tokens),
         },
@@ -113,7 +114,7 @@ export function ModuleRiskScatterChart({
         yAxis: {
           ...axisStyle(tokens),
           type: "value",
-          name: t("metric.churn"),
+          name: t("chart.risk.axis.recentAverage"),
           nameTextStyle: {
             color: tokens.axisName,
             padding: [0, 0, 8, 0],
@@ -128,10 +129,11 @@ export function ModuleRiskScatterChart({
             type: "scatter",
             data: points.map((point) => [
               point.latestLoc,
-              point.latestChurn,
+              point.recentAverageChurn,
               point.sizeMetric,
               point.name,
               point.kind,
+              point.latestChurn,
               point.recentAverageChurn,
               point.peakChurn,
               point.key,
@@ -146,7 +148,7 @@ export function ModuleRiskScatterChart({
               return 14 + ((metric - minSizeMetric) / (maxSizeMetric - minSizeMetric)) * 18;
             },
             itemStyle: {
-              color: ({ data }: { data?: [number, number, number, string, string, number, number, string] }) => {
+              color: ({ data }: { data?: ScatterPoint }) => {
                 const kind = data?.[4] ?? "";
                 if (kind.includes("rust")) {
                   return "#4f7df3";
@@ -161,8 +163,8 @@ export function ModuleRiskScatterChart({
                 return "#7c6ee6";
               },
               borderWidth: 2,
-              borderColor: ({ data }: { data?: [number, number, number, string, string, number, number, string] }) =>
-                data?.[7] === selectedModuleKey ? tokens.heatHigh : "rgba(255,255,255,0.45)",
+              borderColor: ({ data }: { data?: ScatterPoint }) =>
+                data?.[8] === selectedModuleKey ? tokens.heatHigh : "rgba(255,255,255,0.45)",
               shadowBlur: 12,
               shadowColor: "rgba(47, 109, 246, 0.18)",
             },

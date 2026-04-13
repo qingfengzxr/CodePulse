@@ -92,9 +92,11 @@ export const enMessages = {
     "A horizontal bar chart is ideal for answering who is biggest and who is most active. Data is loaded by the parent page.",
   "chart.ranking.summary.total": "Top total {value}",
   "chart.ranking.title": "Current Module Ranking",
+  "chart.risk.axis.recentAverage": "Recent avg churn",
   "chart.risk.description":
-    "Read LOC on the x-axis and churn on the y-axis. Larger points mean higher recent average churn.",
-  "chart.risk.summary.axes": "LOC x churn",
+    "Read current LOC on the x-axis and recent average churn on the y-axis. Larger points mean heavier recent volatility.",
+  "chart.risk.summary.axes": "LOC x recent avg churn",
+  "chart.risk.tooltip.latest": "Latest churn",
   "chart.risk.title": "Risk Scatter",
   "chart.risk.tooltip.peak": "Peak churn",
   "chart.risk.tooltip.recentAverage": "Recent avg churn",
